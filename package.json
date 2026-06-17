@@ -1,0 +1,27 @@
+{
+  "name": "kaname-relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "ci": "pnpm typecheck && pnpm test && pnpm lint && pnpm format",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1",
+    "vitest": "^4.1.9"
+  }
+}
