@@ -39,7 +39,26 @@ importers:
         specifier: ^4.101.0
         version: 4.101.0
 
-  apps/server: {}
+  apps/server:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^2.0.5
+        version: 2.0.5(hono@4.12.25)
+      '@kaname-relay/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@kaname-relay/notifiers':
+        specifier: workspace:*
+        version: link:../../packages/notifiers
+      '@kaname-relay/store':
+        specifier: workspace:*
+        version: link:../../packages/store
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
+      hono:
+        specifier: ^4.12.25
+        version: 4.12.25
 
   apps/web: {}
 
@@ -47,10 +66,17 @@ importers:
 
   packages/core: {}
 
-  packages/notifiers: {}
+  packages/notifiers:
+    dependencies:
+      '@kaname-relay/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/store:
     dependencies:
+      '@kaname-relay/core':
+        specifier: workspace:*
+        version: link:../core
       better-sqlite3:
         specifier: ^12.11.1
         version: 12.11.1
@@ -310,6 +336,12 @@ packages:
   '@eslint/plugin-kit@0.7.2':
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
+
+  '@hono/node-server@2.0.5':
+    resolution: {integrity: sha512-yQFvDmyDo3y6rEOJZDUYPJ49DIKTPpIk4kGvm40xx4Ejne0Pu9a1+exxPN+C1UppWK/WGZX9F++/Xs231tE86g==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      hono: ^4
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -1036,6 +1068,10 @@ packages:
     resolution: {integrity: sha512-sepffkT8stwnIYbsMBpoCHJuJM5l98FUF2AnE07hfvE0m/qp3R586hw4jF4uadbhvg1ooIdzuu7CsfD2jzCaNA==}
     engines: {node: '>=18'}
 
+  hono@4.12.25:
+    resolution: {integrity: sha512-2NFaIyNVgJmBs/ecmtGzlmluTFs5cHEWGTdu0t1HBwYzoGXOL5nUQBRMXsXWla5i4KkG//QMzVP88m1+I3fdAQ==}
+    engines: {node: '>=16.9.0'}
+
   ieee754@1.2.1:
     resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
 
@@ -1696,6 +1732,10 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
+  '@hono/node-server@2.0.5(hono@4.12.25)':
+    dependencies:
+      hono: 4.12.25
+
   '@humanfs/core@0.19.2':
     dependencies:
       '@humanfs/types': 0.15.0
@@ -2282,6 +2322,8 @@ snapshots:
       is-glob: 4.0.3
 
   globals@17.6.0: {}
+
+  hono@4.12.25: {}
 
   ieee754@1.2.1: {}
 

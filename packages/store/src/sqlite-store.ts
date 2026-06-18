@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import type {
   CancelOutboxInput,
+  ChannelRecord,
   ClaimDueOutboxInput,
   IngestInput,
   IngestResult,
@@ -15,7 +16,11 @@ import type {
   OutboxStatus,
   RecoverExpiredLeasesInput,
   RecoverExpiredLeasesResult,
+  RuleChannelRecord,
+  RuleRecord,
   ScheduleOutboxRetryInput,
+  SentLogEntry,
+  WebhookSourceRecord,
 } from './types.js';
 
 interface ReceivedEventIngestRow {
@@ -28,6 +33,59 @@ interface SentLogRow {
   id: string;
   provider_message_id: string | null;
   provider_response_json: string | null;
+}
+
+interface SentLogFullRow extends SentLogRow {
+  outbox_id: string | null;
+  outbound_dedupe_key: string | null;
+  channel_id: string;
+  notifier_type: string;
+  sent_at: number;
+}
+
+interface WebhookSourceRow {
+  id: string;
+  name: string;
+  type: string;
+  enabled: 0 | 1;
+  config_json: string;
+  secret_json_enc: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface ChannelRow {
+  id: string;
+  name: string;
+  type: string;
+  enabled: 0 | 1;
+  config_json: string;
+  secret_json_enc: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface RuleRow {
+  id: string;
+  source_id: string | null;
+  name: string;
+  enabled: 0 | 1;
+  priority: number;
+  match_json: string;
+  template_json: string;
+  stop_on_match: 0 | 1;
+  created_at: number;
+  updated_at: number;
+}
+
+interface RuleChannelRow {
+  rule_id: string;
+  channel_id: string;
+  channel_type: string;
+  enabled: 0 | 1;
+  template_override_json: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 interface OutboxRow {
@@ -117,6 +175,72 @@ function sentLogResult(inserted: boolean, row: SentLogRow): InsertSentLogResult 
   }
 
   return result;
+}
+
+function mapSource(row: WebhookSourceRow): WebhookSourceRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    enabled: row.enabled === 1,
+    configJson: row.config_json,
+    secretJsonEnc: row.secret_json_enc,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapChannel(row: ChannelRow): ChannelRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    enabled: row.enabled === 1,
+    configJson: row.config_json,
+    secretJsonEnc: row.secret_json_enc,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapRule(row: RuleRow): RuleRecord {
+  return {
+    id: row.id,
+    sourceId: row.source_id,
+    name: row.name,
+    enabled: row.enabled === 1,
+    priority: row.priority,
+    matchJson: row.match_json,
+    templateJson: row.template_json,
+    stopOnMatch: row.stop_on_match === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapRuleChannel(row: RuleChannelRow): RuleChannelRecord {
+  return {
+    ruleId: row.rule_id,
+    channelId: row.channel_id,
+    channelType: row.channel_type,
+    enabled: row.enabled === 1,
+    templateOverrideJson: row.template_override_json,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapSentLog(row: SentLogFullRow): SentLogEntry {
+  return {
+    id: row.id,
+    outboxId: row.outbox_id,
+    outboundDedupeKey: row.outbound_dedupe_key,
+    channelId: row.channel_id,
+    notifierType: row.notifier_type,
+    providerMessageId: row.provider_message_id,
+    providerResponseJson: row.provider_response_json,
+    sentAt: row.sent_at,
+  };
 }
 
 function bindOutbox(
@@ -390,6 +514,93 @@ export class SqliteStore {
       | undefined;
 
     return Promise.resolve(row ? mapOutbox(row) : null);
+  }
+
+  public getEnabledSource(id: string): Promise<WebhookSourceRecord | null> {
+    const row = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM webhook_sources
+        WHERE id = ?
+          AND enabled = 1
+        `,
+      )
+      .get(id) as WebhookSourceRow | undefined;
+
+    return Promise.resolve(row ? mapSource(row) : null);
+  }
+
+  public getEnabledChannelRecord(id: string): Promise<ChannelRecord | null> {
+    const row = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM channels
+        WHERE id = ?
+          AND enabled = 1
+        `,
+      )
+      .get(id) as ChannelRow | undefined;
+
+    return Promise.resolve(row ? mapChannel(row) : null);
+  }
+
+  public listEnabledRulesForSource(sourceId: string): Promise<RuleRecord[]> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM rules
+        WHERE enabled = 1
+          AND (source_id = :source_id OR source_id IS NULL)
+        ORDER BY priority DESC, created_at ASC
+        `,
+      )
+      .all({ source_id: sourceId }) as RuleRow[];
+
+    return Promise.resolve(rows.map(mapRule));
+  }
+
+  public listEnabledRuleChannels(ruleId: string): Promise<RuleChannelRecord[]> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT
+          rule_channels.rule_id,
+          rule_channels.channel_id,
+          channels.type AS channel_type,
+          rule_channels.enabled,
+          rule_channels.template_override_json,
+          rule_channels.created_at,
+          rule_channels.updated_at
+        FROM rule_channels
+        INNER JOIN channels ON channels.id = rule_channels.channel_id
+        WHERE rule_channels.rule_id = ?
+          AND rule_channels.enabled = 1
+          AND channels.enabled = 1
+        ORDER BY rule_channels.created_at ASC
+        `,
+      )
+      .all(ruleId) as RuleChannelRow[];
+
+    return Promise.resolve(rows.map(mapRuleChannel));
+  }
+
+  public findSentLogByDedupeKey(outboundDedupeKey: string): Promise<SentLogEntry | null> {
+    const row = this.db
+      .prepare(
+        `
+        SELECT
+          id, outbox_id, outbound_dedupe_key, channel_id, notifier_type,
+          provider_message_id, provider_response_json, sent_at
+        FROM sent_log
+        WHERE outbound_dedupe_key = ?
+        `,
+      )
+      .get(outboundDedupeKey) as SentLogFullRow | undefined;
+
+    return Promise.resolve(row ? mapSentLog(row) : null);
   }
 
   private ingestSync(input: IngestInput): IngestResult {

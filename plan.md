@@ -293,10 +293,10 @@ MVP 规则 DSL 不执行用户 JavaScript。建议支持：
 MVP 支持的 `op`：
 
 ```txt
-eq, ne, contains, in, exists
+eq, ne, contains, starts_with, ends_with, in, exists
 ```
 
-`regex`、`starts_with`、`ends_with` 暂不进入 MVP。`regex` 只有在引入安全 regex 引擎，或实现硬性长度限制与执行超时后才能开启；Worker 免费版的单次 CPU 上限无法承受灾难性回溯。
+未知 `op` 必须报错或告警，不能静默返回不匹配。`regex` 暂不进入 MVP；只有在引入安全 regex 引擎，或实现硬性长度限制与执行超时后才能开启。Worker 免费版的单次 CPU 上限无法承受灾难性回溯。
 
 ### 4.3 `rule_channels`
 
@@ -420,7 +420,9 @@ INSERT INTO received_events (
   :id, :source_id, :inbound_dedupe_key, :event_type, :payload_hash,
   :now, :now, 1, 0, 0
 )
-ON CONFLICT(source_id, inbound_dedupe_key) DO UPDATE SET
+ON CONFLICT(source_id, inbound_dedupe_key)
+WHERE inbound_dedupe_key IS NOT NULL
+DO UPDATE SET
   last_seen_at = excluded.last_seen_at,
   seen_count = received_events.seen_count + 1
 RETURNING id, seen_count, committed;
@@ -1242,6 +1244,8 @@ export interface SourceAdapter {
 4. Adapter 不调用 notifier。
 5. Adapter 必须限制 body size，默认不超过 1 MiB。
 
+M1 的 `generic` source 暂不实现 webhook 验签；`SourceAdapter.verify()` 和各 source 的签名/secret 校验列入 M6 硬化项。
+
 ### 8.3 `Notifier`
 
 ```ts
@@ -1750,6 +1754,8 @@ GET    /api/admin/dashboard
 4. 错误分类完善。
 5. README 和部署指南。
 6. 备份/恢复说明。
+7. 渠道 `secret_json_enc` 加密、密钥轮换和迁移；M1 Node 版无 `decryptSecrets` 时只允许明文 JSON fallback，并必须写 warning。
+8. `SourceAdapter.verify()` 接入 webhook 签名/secret 校验，generic source 也要支持可配置验签。
 
 完成标准：
 

@@ -5,5 +5,13 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.5",
+    "@kaname-relay/core": "workspace:*",
+    "@kaname-relay/notifiers": "workspace:*",
+    "@kaname-relay/store": "workspace:*",
+    "better-sqlite3": "^12.11.1",
+    "hono": "^4.12.25"
   }
 }

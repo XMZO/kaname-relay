@@ -2,6 +2,51 @@ export type UnixMs = number;
 
 export type OutboxStatus = 'pending' | 'sending' | 'sent' | 'dead' | 'cancelled';
 
+export interface WebhookSourceRecord {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  configJson: string;
+  secretJsonEnc: string | null;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
+export interface ChannelRecord {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  configJson: string;
+  secretJsonEnc: string | null;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
+export interface RuleRecord {
+  id: string;
+  sourceId: string | null;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  matchJson: string;
+  templateJson: string;
+  stopOnMatch: boolean;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
+export interface RuleChannelRecord {
+  ruleId: string;
+  channelId: string;
+  channelType: string;
+  enabled: boolean;
+  templateOverrideJson: string | null;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
 export interface NewReceivedEvent {
   id: string;
   sourceId: string;
@@ -80,6 +125,17 @@ export interface InsertSentLogResult {
   sentLogId: string;
   providerMessageId?: string;
   providerResponseJson?: string;
+}
+
+export interface SentLogEntry {
+  id: string;
+  outboxId: string | null;
+  outboundDedupeKey: string | null;
+  channelId: string;
+  notifierType: string;
+  providerMessageId: string | null;
+  providerResponseJson: string | null;
+  sentAt: UnixMs;
 }
 
 export interface MarkOutboxSentInput {

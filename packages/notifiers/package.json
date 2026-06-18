@@ -5,5 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kaname-relay/core": "workspace:*"
   }
 }

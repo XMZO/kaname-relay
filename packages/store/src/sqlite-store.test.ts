@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   applySqliteMigrations,
+  SqliteProcessPendingStore,
   SqliteStore,
   type NewOutboxItem,
   type OutboxItem,
@@ -94,6 +95,7 @@ function insertOutboxRow(
     leaseId: string | null;
     outboundDedupeKey: string | null;
     receivedEventId: string | null;
+    messageJson: string;
   }> = {},
 ): void {
   db.prepare(
@@ -105,7 +107,7 @@ function insertOutboxRow(
     ) VALUES (
       :id, 'source-1', :received_event_id, 'channel-1', 'telegram', :status,
       0, :next_at, :locked_until, :lease_id, :attempts, :max_attempts,
-      :outbound_dedupe_key, '{"ok":true}', '{"text":"hello"}', 1, 1
+      :outbound_dedupe_key, '{"ok":true}', :message_json, 1, 1
     )
     `,
   ).run({
@@ -118,6 +120,7 @@ function insertOutboxRow(
     attempts: overrides.attempts ?? 0,
     max_attempts: overrides.maxAttempts ?? 10,
     outbound_dedupe_key: overrides.outboundDedupeKey ?? `dedupe:${id}`,
+    message_json: overrides.messageJson ?? '{"text":"hello"}',
   });
 }
 
@@ -663,5 +666,39 @@ describe('SqliteStore outbox lease methods', () => {
       providerMessageId: 'provider-1',
       providerResponseJson: '{"ok":true}',
     });
+  });
+
+  it('dead-letters invalid message_json during process-store claim without throwing', async () => {
+    const { store, db } = createHarness();
+    const processStore = new SqliteProcessPendingStore(store);
+
+    insertOutboxRow(db, 'bad-message', {
+      messageJson: '{"text":',
+    });
+    insertOutboxRow(db, 'good-message', {
+      outboundDedupeKey: 'good-message-dedupe',
+    });
+
+    const claimed = await processStore.claimDueOutbox({
+      now: 10_000,
+      leaseId: 'lease-process',
+      leaseUntil: 20_000,
+      limit: 10,
+    });
+
+    expect(claimed.map((item) => item.id)).toEqual(['good-message']);
+    expect(claimed.find((item) => item.id === 'good-message')?.message).toEqual({
+      text: 'hello',
+    });
+
+    await expect(getOutbox(store, 'bad-message')).resolves.toMatchObject({
+      status: 'dead',
+      attempts: 1,
+      leaseId: null,
+      lockedUntil: null,
+    });
+
+    const bad = await getOutbox(store, 'bad-message');
+    expect(bad.lastError).toContain('invalid message_json');
   });
 });
