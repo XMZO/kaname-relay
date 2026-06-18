@@ -1,15 +1,19 @@
-import { processPending } from '@kaname-relay/core';
 import {
+  createAesGcmSecretCodec,
   isSupportedSourceType,
   matchesRule,
+  parseSecretJson,
   parseWebhookSourceEvent,
+  processPending,
   renderNotificationMessage,
+  verifyWebhookSignature,
   type JsonObject,
   type JsonValue,
   type Logger,
   type Notifier,
   type ProcessPendingArgs,
   type ProcessPendingResult,
+  type SecretCodec,
 } from '@kaname-relay/core';
 import { createResendNotifier, createTelegramNotifier } from '@kaname-relay/notifiers';
 import { createSmtpNotifier } from '@kaname-relay/notifiers/smtp.node';
@@ -41,6 +45,20 @@ export interface ServerAppOptions {
   webDir?: string | null;
   triggerProcessing?: () => void | Promise<void>;
   logger?: Logger;
+  secretCodec?: SecretCodec;
+  rateLimit?: RateLimitConfig | false;
+}
+
+export interface RateLimitConfig {
+  windowMs: number;
+  max: number;
+}
+
+export interface RetentionConfig {
+  sentRetentionMs: number;
+  receivedRetentionMs: number;
+  limit: number;
+  intervalMs: number;
 }
 
 export interface ProcessSchedulerOptions {
@@ -65,6 +83,16 @@ export interface ProcessScheduler {
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const DEFAULT_MAX_ATTEMPTS = 10;
+const DEFAULT_RATE_LIMIT: RateLimitConfig = {
+  windowMs: 60_000,
+  max: 120,
+};
+const DEFAULT_RETENTION: RetentionConfig = {
+  sentRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+  receivedRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+  limit: 100,
+  intervalMs: 60 * 60 * 1_000,
+};
 
 export function createServerApp(options: ServerAppOptions): Hono {
   const app = new Hono();
@@ -72,6 +100,10 @@ export function createServerApp(options: ServerAppOptions): Hono {
   const idGenerator = options.idGenerator ?? randomUUID;
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const rateLimiter =
+    options.rateLimit === false
+      ? null
+      : createMemoryRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
 
   app.onError((error, context) => {
     if (error instanceof AdminHttpError) {
@@ -102,10 +134,20 @@ export function createServerApp(options: ServerAppOptions): Hono {
     adminOptions.logger = options.logger;
   }
 
+  if (options.secretCodec !== undefined) {
+    adminOptions.secretCodec = options.secretCodec;
+  }
+
   mountAdminRoutes(app, adminOptions);
 
   app.post('/hooks/:sourceId', async (context) => {
     const sourceId = context.req.param('sourceId');
+    const rateKey = `${sourceId}:${clientIp(context.req.raw.headers)}`;
+
+    if (rateLimiter && !rateLimiter.allow(rateKey, now())) {
+      return context.json({ error: 'rate limit exceeded' }, 429);
+    }
+
     const source = await options.store.getEnabledSource(sourceId);
 
     if (!source) {
@@ -122,6 +164,19 @@ export function createServerApp(options: ServerAppOptions): Hono {
       return context.json({ error: 'payload too large' }, 413);
     }
 
+    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
+    const sourceSecrets = await decryptSecretJson(source.secretJsonEnc, source.id, options);
+    const verified = await verifyWebhookSignature({
+      rawBody,
+      headers: context.req.raw.headers,
+      config: sourceConfig,
+      secrets: sourceSecrets,
+    });
+
+    if (!verified) {
+      return context.json({ error: 'invalid webhook signature' }, 401);
+    }
+
     const payloadResult = parseJsonObject(rawBody);
 
     if (!payloadResult.ok) {
@@ -129,7 +184,6 @@ export function createServerApp(options: ServerAppOptions): Hono {
     }
 
     const payloadHash = createHash('sha256').update(rawBody).digest('hex');
-    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
     const parsedEvent = parseWebhookSourceEvent({
       sourceType: source.type,
       payload: payloadResult.value,
@@ -260,6 +314,7 @@ export function createNodeRuntime(
     port?: number;
     webDir?: string | null;
     logger?: Logger;
+    retention?: RetentionConfig | false;
   } = {},
 ): {
   app: Hono;
@@ -276,15 +331,18 @@ export function createNodeRuntime(
   applySqliteMigrations(db, runtimeMigrationsDir());
 
   const store = new SqliteStore(db);
+  const secretCodec = secretCodecFromEnv();
   const notifiers = {
     resend: createResendNotifier(),
     smtp: createSmtpNotifier(),
     telegram: createTelegramNotifier(),
   };
-  const processStore = new SqliteProcessPendingStore(
-    store,
-    options.logger === undefined ? {} : { logger: options.logger },
-  );
+  const processStore = new SqliteProcessPendingStore(store, {
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(secretCodec === undefined
+      ? {}
+      : { decryptSecrets: (secretJsonEnc: string | null) => secretCodec.decrypt(secretJsonEnc) }),
+  });
   const schedulerOptions: ProcessSchedulerOptions = {
     store: processStore,
     notifiers,
@@ -308,8 +366,27 @@ export function createNodeRuntime(
     appOptions.logger = options.logger;
   }
 
+  if (secretCodec !== undefined) {
+    appOptions.secretCodec = secretCodec;
+  }
+
   const app = createServerApp(appOptions);
   let server: ReturnType<typeof serve> | undefined;
+  let cleanupTimer: ReturnType<typeof setInterval> | undefined;
+
+  async function cleanupTick(): Promise<void> {
+    if (options.retention === false) {
+      return;
+    }
+
+    const retention = options.retention ?? DEFAULT_RETENTION;
+    await store.cleanupRetention({
+      now: Date.now(),
+      sentRetentionMs: retention.sentRetentionMs,
+      receivedRetentionMs: retention.receivedRetentionMs,
+      limit: retention.limit,
+    });
+  }
 
   return {
     app,
@@ -318,6 +395,17 @@ export function createNodeRuntime(
     scheduler,
     start() {
       scheduler.start();
+      if (options.retention !== false && cleanupTimer === undefined) {
+        const retention = options.retention ?? DEFAULT_RETENTION;
+        cleanupTimer = setInterval(() => {
+          void cleanupTick().catch((error: unknown) => {
+            options.logger?.error?.('retention cleanup failed', {
+              error: error instanceof Error ? error.message : 'unknown error',
+            });
+          });
+        }, retention.intervalMs);
+        cleanupTimer.unref?.();
+      }
       server = serve({
         fetch: app.fetch,
         hostname: process.env.HOST ?? '0.0.0.0',
@@ -326,6 +414,10 @@ export function createNodeRuntime(
     },
     stop() {
       scheduler.stop();
+      if (cleanupTimer) {
+        clearInterval(cleanupTimer);
+        cleanupTimer = undefined;
+      }
       server?.close();
       db.close();
     },
@@ -450,6 +542,26 @@ function parseStoredJsonObject(raw: string, label: string): JsonObject {
   return parsed;
 }
 
+async function decryptSecretJson(
+  secretJsonEnc: string | null,
+  ownerId: string,
+  options: Pick<ServerAppOptions, 'logger' | 'secretCodec'>,
+): Promise<JsonObject> {
+  if (options.secretCodec) {
+    return options.secretCodec.decrypt(secretJsonEnc);
+  }
+
+  if (!secretJsonEnc) {
+    return {};
+  }
+
+  options.logger?.warn?.('using plaintext source secrets because no secretCodec was configured', {
+    ownerId,
+  });
+
+  return parseSecretJson(secretJsonEnc);
+}
+
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -466,6 +578,61 @@ function numberFromEnv(value: string | undefined): number | undefined {
   const parsed = Number(value);
 
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+interface MemoryRateLimiter {
+  allow(key: string, now: number): boolean;
+}
+
+function createMemoryRateLimiter(config: RateLimitConfig): MemoryRateLimiter {
+  const buckets = new Map<string, { windowStart: number; count: number }>();
+
+  return {
+    allow(key, now) {
+      const current = buckets.get(key);
+
+      if (!current || now - current.windowStart >= config.windowMs) {
+        buckets.set(key, {
+          windowStart: now,
+          count: 1,
+        });
+        pruneRateLimitBuckets(buckets, now, config.windowMs);
+        return true;
+      }
+
+      if (current.count >= config.max) {
+        return false;
+      }
+
+      current.count += 1;
+      return true;
+    },
+  };
+}
+
+function pruneRateLimitBuckets(
+  buckets: Map<string, { windowStart: number; count: number }>,
+  now: number,
+  windowMs: number,
+): void {
+  if (buckets.size < 1_000) {
+    return;
+  }
+
+  for (const [key, bucket] of buckets.entries()) {
+    if (now - bucket.windowStart >= windowMs) {
+      buckets.delete(key);
+    }
+  }
+}
+
+function clientIp(headers: Headers): string {
+  return (
+    headers.get('cf-connecting-ip') ??
+    headers.get('x-real-ip') ??
+    headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    'unknown'
+  );
 }
 
 function defaultDatabasePath(): string {
@@ -490,6 +657,12 @@ function defaultWebDir(): string | null {
   }
 
   return resolve(fromEnv ?? resolve('apps', 'web', 'dist'));
+}
+
+function secretCodecFromEnv(): SecretCodec | undefined {
+  const appSecret = process.env.APP_SECRET ?? process.env.KANAME_APP_SECRET;
+
+  return appSecret ? createAesGcmSecretCodec(appSecret) : undefined;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

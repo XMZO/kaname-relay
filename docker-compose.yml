@@ -14,6 +14,7 @@ services:
       HOST: 0.0.0.0
       PORT: 3000
       DATABASE_URL: file:/data/kaname-relay.sqlite
+      APP_SECRET: ${APP_SECRET:?set APP_SECRET to a stable random value}
       KANAME_WEB_DIR: /app/apps/web/dist
       KANAME_MIGRATIONS_DIR: /app/packages/store/migrations
       TZ: ${TZ:-Asia/Shanghai}

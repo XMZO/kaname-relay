@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -363,6 +364,95 @@ describe('server webhook endpoint', () => {
       count: number;
     };
     expect(outboxCount.count).toBe(1);
+  });
+
+  it('requires a valid HMAC signature when source webhookSecret is configured', async () => {
+    const { store, db } = createHarness();
+    db.prepare(
+      `
+      UPDATE webhook_sources
+      SET secret_json_enc = '{"webhookSecret":"hook-secret"}'
+      WHERE id = 'source-1'
+      `,
+    ).run();
+    let id = 0;
+    const app = createServerApp({
+      store,
+      now: () => 10_000,
+      idGenerator: () => `id-${++id}`,
+    });
+    const body = JSON.stringify({
+      id: 'evt-signed',
+      eventType: 'demo',
+      name: 'Ada',
+    });
+    const signature = createHmac('sha256', 'hook-secret').update(body).digest('hex');
+
+    const missing = await app.request('/hooks/source-1', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    const signed = await app.request('/hooks/source-1', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-kaname-signature': `sha256=${signature}`,
+      },
+      body,
+    });
+
+    expect(missing.status).toBe(401);
+    expect(signed.status).toBe(202);
+    await expect(signed.json()).resolves.toMatchObject({
+      accepted: true,
+      duplicate: false,
+      outboxCount: 1,
+    });
+  });
+
+  it('rate-limits webhook requests per source and client address', async () => {
+    const { store } = createHarness();
+    let id = 0;
+    const app = createServerApp({
+      store,
+      now: () => 10_000,
+      idGenerator: () => `id-${++id}`,
+      rateLimit: {
+        windowMs: 60_000,
+        max: 1,
+      },
+    });
+
+    const first = await app.request('/hooks/source-1', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-real-ip': '192.0.2.1',
+      },
+      body: JSON.stringify({
+        id: 'evt-rate-1',
+        eventType: 'demo',
+        name: 'Ada',
+      }),
+    });
+    const second = await app.request('/hooks/source-1', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-real-ip': '192.0.2.1',
+      },
+      body: JSON.stringify({
+        id: 'evt-rate-2',
+        eventType: 'demo',
+        name: 'Ada',
+      }),
+    });
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(429);
   });
 
   it('keeps NULL inbound dedupe key webhooks independent end to end', async () => {

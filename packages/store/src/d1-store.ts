@@ -2,6 +2,8 @@ import type {
   CancelOutboxInput,
   ChannelRecord,
   ClaimDueOutboxInput,
+  CleanupRetentionInput,
+  CleanupRetentionResult,
   IngestInput,
   IngestResult,
   InsertSentLogResult,
@@ -757,6 +759,64 @@ export class D1Store {
       .first<SentLogFullRow>();
 
     return row ? mapSentLog(row) : null;
+  }
+
+  public async cleanupRetention(input: CleanupRetentionInput): Promise<CleanupRetentionResult> {
+    const sentCutoff = input.now - input.sentRetentionMs;
+    const receivedCutoff = input.now - input.receivedRetentionMs;
+    const [sentLog, outbox, receivedEvents] = await this.db.batch([
+      this.db
+        .prepare(
+          `
+          DELETE FROM sent_log
+          WHERE id IN (
+            SELECT id
+            FROM sent_log
+            WHERE sent_at < ?
+            ORDER BY sent_at ASC
+            LIMIT ?
+          )
+          `,
+        )
+        .bind(sentCutoff, input.limit),
+      this.db
+        .prepare(
+          `
+          DELETE FROM outbox
+          WHERE id IN (
+            SELECT id
+            FROM outbox
+            WHERE status IN ('sent', 'cancelled')
+              AND COALESCE(sent_at, cancelled_at, updated_at) < ?
+            ORDER BY COALESCE(sent_at, cancelled_at, updated_at) ASC
+            LIMIT ?
+          )
+          `,
+        )
+        .bind(sentCutoff, input.limit),
+      this.db
+        .prepare(
+          `
+          DELETE FROM received_events
+          WHERE id IN (
+            SELECT received_events.id
+            FROM received_events
+            LEFT JOIN outbox ON outbox.received_event_id = received_events.id
+            WHERE received_events.last_seen_at < ?
+              AND outbox.id IS NULL
+            ORDER BY received_events.last_seen_at ASC
+            LIMIT ?
+          )
+          `,
+        )
+        .bind(receivedCutoff, input.limit),
+    ]);
+
+    return {
+      sentLogDeleted: sentLog?.meta?.changes ?? 0,
+      outboxDeleted: outbox?.meta?.changes ?? 0,
+      receivedEventsDeleted: receivedEvents?.meta?.changes ?? 0,
+    };
   }
 
   private async findSentLogRow(

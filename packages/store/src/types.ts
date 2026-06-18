@@ -132,6 +132,19 @@ export interface ListOutboxFilters {
   limit?: number;
 }
 
+export interface CleanupRetentionInput {
+  now: UnixMs;
+  sentRetentionMs: number;
+  receivedRetentionMs: number;
+  limit: number;
+}
+
+export interface CleanupRetentionResult {
+  sentLogDeleted: number;
+  outboxDeleted: number;
+  receivedEventsDeleted: number;
+}
+
 export interface NewReceivedEvent {
   id: string;
   sourceId: string;

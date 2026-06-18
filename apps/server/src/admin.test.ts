@@ -14,6 +14,11 @@ interface Harness {
   dir: string;
 }
 
+interface AuthSession {
+  cookie: string;
+  csrf: string;
+}
+
 const cleanupHandles: Array<{ db: Database.Database; dir: string }> = [];
 
 afterEach(() => {
@@ -40,7 +45,7 @@ function createHarness(): Harness {
   };
 }
 
-async function initialize(app: ReturnType<typeof createServerApp>): Promise<string> {
+async function initialize(app: ReturnType<typeof createServerApp>): Promise<AuthSession> {
   const response = await app.request('/api/auth/init', {
     method: 'POST',
     headers: {
@@ -53,13 +58,37 @@ async function initialize(app: ReturnType<typeof createServerApp>): Promise<stri
 
   expect(response.status).toBe(201);
 
-  const cookie = response.headers.get('set-cookie')?.split(';')[0];
+  const setCookie = response.headers.get('set-cookie') ?? '';
+  const session = cookiePair(setCookie, 'kaname_session');
+  const csrf = cookiePair(setCookie, 'kaname_csrf');
 
-  if (!cookie) {
-    throw new Error('expected session cookie');
+  if (!session || !csrf) {
+    throw new Error('expected session and csrf cookies');
   }
 
-  return cookie;
+  return {
+    cookie: `${session}; ${csrf}`,
+    csrf: csrf.slice('kaname_csrf='.length),
+  };
+}
+
+function cookiePair(header: string, name: string): string | null {
+  const match = new RegExp(`${name}=[^;,]+`).exec(header);
+
+  return match ? match[0] : null;
+}
+
+function adminHeaders(auth: AuthSession, contentType = false): Record<string, string> {
+  const headers: Record<string, string> = {
+    cookie: auth.cookie,
+    'x-kaname-csrf': auth.csrf,
+  };
+
+  if (contentType) {
+    headers['content-type'] = 'application/json';
+  }
+
+  return headers;
 }
 
 describe('admin API', () => {
@@ -87,14 +116,24 @@ describe('admin API', () => {
     const denied = await app.request('/api/admin/dashboard');
     expect(denied.status).toBe(401);
 
-    const cookie = await initialize(app);
+    const auth = await initialize(app);
 
-    const sourceResponse = await app.request('/api/admin/sources', {
+    const csrfDenied = await app.request('/api/admin/sources', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        cookie,
+        cookie: auth.cookie,
       },
+      body: JSON.stringify({
+        id: 'csrf-denied',
+        name: 'CSRF Denied',
+      }),
+    });
+    expect(csrfDenied.status).toBe(401);
+
+    const sourceResponse = await app.request('/api/admin/sources', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
       body: JSON.stringify({
         id: 'source-ui',
         name: 'UI Source',
@@ -120,10 +159,7 @@ describe('admin API', () => {
 
     const channelResponse = await app.request('/api/admin/channels', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        cookie,
-      },
+      headers: adminHeaders(auth, true),
       body: JSON.stringify({
         id: 'channel-ui',
         name: 'UI Telegram',
@@ -145,10 +181,7 @@ describe('admin API', () => {
 
     const ruleResponse = await app.request('/api/admin/rules', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        cookie,
-      },
+      headers: adminHeaders(auth, true),
       body: JSON.stringify({
         id: 'rule-ui',
         sourceId: 'source-ui',
@@ -170,10 +203,7 @@ describe('admin API', () => {
 
     const preview = await app.request('/api/admin/rules/rule-ui/preview', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        cookie,
-      },
+      headers: adminHeaders(auth, true),
       body: JSON.stringify({
         payload: {
           eventType: 'demo.created',
@@ -197,10 +227,7 @@ describe('admin API', () => {
 
     const testSend = await app.request('/api/admin/channels/channel-ui/test', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        cookie,
-      },
+      headers: adminHeaders(auth, true),
       body: JSON.stringify({
         message: {
           text: 'Testing from UI',
@@ -235,13 +262,13 @@ describe('admin API', () => {
       now: () => 20_000,
       idGenerator: () => `replay-${++id}`,
     });
-    const cookie = await initialize(app);
+    const auth = await initialize(app);
 
     seedAdminOutbox(db);
 
     const dashboard = await app.request('/api/admin/dashboard', {
       headers: {
-        cookie,
+        cookie: auth.cookie,
       },
     });
     expect(dashboard.status).toBe(200);
@@ -254,7 +281,7 @@ describe('admin API', () => {
 
     const outbox = await app.request('/api/admin/outbox?status=dead', {
       headers: {
-        cookie,
+        cookie: auth.cookie,
       },
     });
     expect(outbox.status).toBe(200);
@@ -269,9 +296,7 @@ describe('admin API', () => {
 
     const replay = await app.request('/api/admin/outbox/dead-outbox/replay', {
       method: 'POST',
-      headers: {
-        cookie,
-      },
+      headers: adminHeaders(auth),
     });
     expect(replay.status).toBe(201);
     await expect(replay.json()).resolves.toMatchObject({
@@ -284,9 +309,7 @@ describe('admin API', () => {
 
     const cancel = await app.request('/api/admin/outbox/pending-outbox/cancel', {
       method: 'POST',
-      headers: {
-        cookie,
-      },
+      headers: adminHeaders(auth),
     });
     expect(cancel.status).toBe(200);
     const cancelled = db
@@ -299,7 +322,7 @@ describe('admin API', () => {
 
     const sentLog = await app.request('/api/admin/sent-log', {
       headers: {
-        cookie,
+        cookie: auth.cookie,
       },
     });
     expect(sentLog.status).toBe(200);

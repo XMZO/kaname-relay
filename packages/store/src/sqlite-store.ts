@@ -5,6 +5,8 @@ import type {
   AppSettingRecord,
   CancelOutboxInput,
   ChannelRecord,
+  CleanupRetentionInput,
+  CleanupRetentionResult,
   DashboardStats,
   ClaimDueOutboxInput,
   IngestInput,
@@ -1068,6 +1070,62 @@ export class SqliteStore {
       receivedLast24h: received.count,
       outboxByStatus,
       recentErrors: recentErrors.map(mapOutbox),
+    });
+  }
+
+  public cleanupRetention(input: CleanupRetentionInput): Promise<CleanupRetentionResult> {
+    const sentCutoff = input.now - input.sentRetentionMs;
+    const receivedCutoff = input.now - input.receivedRetentionMs;
+    const sentLog = this.db
+      .prepare(
+        `
+        DELETE FROM sent_log
+        WHERE id IN (
+          SELECT id
+          FROM sent_log
+          WHERE sent_at < ?
+          ORDER BY sent_at ASC
+          LIMIT ?
+        )
+        `,
+      )
+      .run(sentCutoff, input.limit);
+    const outbox = this.db
+      .prepare(
+        `
+        DELETE FROM outbox
+        WHERE id IN (
+          SELECT id
+          FROM outbox
+          WHERE status IN ('sent', 'cancelled')
+            AND COALESCE(sent_at, cancelled_at, updated_at) < ?
+          ORDER BY COALESCE(sent_at, cancelled_at, updated_at) ASC
+          LIMIT ?
+        )
+        `,
+      )
+      .run(sentCutoff, input.limit);
+    const receivedEvents = this.db
+      .prepare(
+        `
+        DELETE FROM received_events
+        WHERE id IN (
+          SELECT received_events.id
+          FROM received_events
+          LEFT JOIN outbox ON outbox.received_event_id = received_events.id
+          WHERE received_events.last_seen_at < ?
+            AND outbox.id IS NULL
+          ORDER BY received_events.last_seen_at ASC
+          LIMIT ?
+        )
+        `,
+      )
+      .run(receivedCutoff, input.limit);
+
+    return Promise.resolve({
+      sentLogDeleted: sentLog.changes,
+      outboxDeleted: outbox.changes,
+      receivedEventsDeleted: receivedEvents.changes,
     });
   }
 

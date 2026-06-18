@@ -7,6 +7,7 @@ import {
   type Logger,
   type NotificationMessage,
   type Notifier,
+  type SecretCodec,
 } from '@kaname-relay/core';
 import {
   SqliteStore,
@@ -29,11 +30,14 @@ export interface AdminRoutesOptions {
   notifiers: Record<string, Notifier | undefined>;
   triggerProcessing?: () => void | Promise<void>;
   logger?: Logger;
+  secretCodec?: SecretCodec;
 }
 
 const PASSWORD_SETTING = 'admin.passwordHash';
 const SESSION_SECRET_SETTING = 'admin.sessionSecret';
 const SESSION_COOKIE = 'kaname_session';
+const CSRF_COOKIE = 'kaname_csrf';
+const CSRF_HEADER = 'x-kaname-csrf';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const DEFAULT_GENERIC_SOURCE_CONFIG = {
   inboundDedupePath: '$.id',
@@ -91,6 +95,9 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     deleteCookie(context, SESSION_COOKIE, {
       path: '/',
     });
+    deleteCookie(context, CSRF_COOKIE, {
+      path: '/',
+    });
 
     return context.json({ ok: true });
   });
@@ -106,6 +113,10 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
   app.use('/api/admin/*', async (context, next) => {
     if (!(await isAuthenticated(context, options))) {
       throw new AdminHttpError(401, 'not authenticated');
+    }
+
+    if (!isSafeMethod(context.req.method) && !hasValidCsrfToken(context)) {
+      throw new AdminHttpError(401, 'invalid csrf token');
     }
 
     await next();
@@ -134,7 +145,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
       configJson: JSON.stringify(
         jsonObjectOrDefault(body.config, defaultSourceConfig(type), 'config'),
       ),
-      secretJsonEnc: secretJsonFromBody(body),
+      secretJsonEnc: await secretJsonFromBody(body, options),
       now: options.now(),
     });
 
@@ -168,7 +179,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     }
 
     if (hasOwn(body, 'secrets')) {
-      patch.secretJsonEnc = secretJsonFromBody(body);
+      patch.secretJsonEnc = await secretJsonFromBody(body, options);
     }
 
     const source = await options.store.patchSource(patch);
@@ -184,7 +195,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     const body = await readJsonObject(context);
     const source = await options.store.patchSource({
       id: context.req.param('id'),
-      secretJsonEnc: secretJsonFromBody(body),
+      secretJsonEnc: await secretJsonFromBody(body, options),
       now: options.now(),
     });
 
@@ -211,7 +222,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
       type: requiredString(body.type, 'type'),
       enabled: booleanOrDefault(body.enabled, true),
       configJson: JSON.stringify(jsonObjectOrDefault(body.config, {}, 'config')),
-      secretJsonEnc: secretJsonFromBody(body),
+      secretJsonEnc: await secretJsonFromBody(body, options),
       now: options.now(),
     });
 
@@ -245,7 +256,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     }
 
     if (hasOwn(body, 'secrets')) {
-      patch.secretJsonEnc = secretJsonFromBody(body);
+      patch.secretJsonEnc = await secretJsonFromBody(body, options);
     }
 
     const channel = await options.store.patchChannel(patch);
@@ -273,7 +284,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     const body = await readJsonObject(context);
     const message = notificationMessageOrDefault(body.message);
     const sendContext: Parameters<Notifier['send']>[1] = {
-      channel: channelConfig(channel),
+      channel: await channelConfig(channel, options),
       idempotencyKey: `test:${channel.id}:${options.now()}`,
       now: options.now,
       signal: AbortSignal.timeout(15_000),
@@ -536,6 +547,12 @@ async function setSessionCookie(context: Context, options: AdminRoutesOptions): 
     path: '/',
     maxAge: Math.floor(SESSION_TTL_MS / 1_000),
   });
+  setCookie(context, CSRF_COOKIE, randomBytes(24).toString('base64url'), {
+    httpOnly: false,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: Math.floor(SESSION_TTL_MS / 1_000),
+  });
 }
 
 async function getSessionSecret(store: SqliteStore, now: number): Promise<string> {
@@ -610,6 +627,24 @@ function verifySessionToken(token: string, secret: string): { exp: number } | nu
   return { exp: payload.exp };
 }
 
+function hasValidCsrfToken(context: Context): boolean {
+  const header = context.req.header(CSRF_HEADER);
+  const cookie = getCookie(context, CSRF_COOKIE);
+
+  if (!header || !cookie) {
+    return false;
+  }
+
+  const headerBuffer = Buffer.from(header);
+  const cookieBuffer = Buffer.from(cookie);
+
+  return headerBuffer.length === cookieBuffer.length && timingSafeEqual(headerBuffer, cookieBuffer);
+}
+
+function isSafeMethod(method: string): boolean {
+  return method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+}
+
 async function readJsonObject(context: Context): Promise<JsonObject> {
   let value: JsonValue;
 
@@ -679,16 +714,17 @@ function ruleResponse(
   };
 }
 
-function channelConfig(channel: ChannelRecord): ChannelConfig {
+async function channelConfig(
+  channel: ChannelRecord,
+  options: AdminRoutesOptions,
+): Promise<ChannelConfig> {
   return {
     id: channel.id,
     name: channel.name,
     type: channel.type,
     enabled: channel.enabled,
     config: parseJsonObject(channel.configJson, `channel config ${channel.id}`),
-    secrets: channel.secretJsonEnc
-      ? parseJsonObject(channel.secretJsonEnc, `channel secret ${channel.id}`)
-      : {},
+    secrets: await decryptSecretJson(channel.secretJsonEnc, channel.id, options),
   };
 }
 
@@ -708,12 +744,43 @@ function notificationMessageOrDefault(value: JsonValue | undefined): Notificatio
   return message;
 }
 
-function secretJsonFromBody(body: JsonObject): string | null {
+async function secretJsonFromBody(
+  body: JsonObject,
+  options: AdminRoutesOptions,
+): Promise<string | null> {
   if (!hasOwn(body, 'secrets') || body.secrets === null) {
     return null;
   }
 
-  return JSON.stringify(jsonObject(body.secrets, 'secrets'));
+  const secrets = jsonObject(body.secrets, 'secrets');
+
+  if (options.secretCodec) {
+    return options.secretCodec.encrypt(secrets);
+  }
+
+  options.logger?.warn?.('storing plaintext secrets because no secretCodec was configured');
+
+  return JSON.stringify(secrets);
+}
+
+async function decryptSecretJson(
+  secretJsonEnc: string | null,
+  ownerId: string,
+  options: AdminRoutesOptions,
+): Promise<JsonObject> {
+  if (options.secretCodec) {
+    return options.secretCodec.decrypt(secretJsonEnc);
+  }
+
+  if (!secretJsonEnc) {
+    return {};
+  }
+
+  options.logger?.warn?.('using plaintext secrets because no secretCodec was configured', {
+    ownerId,
+  });
+
+  return parseJsonObject(secretJsonEnc, `secret ${ownerId}`);
 }
 
 function defaultSourceConfig(type: string): JsonObject {

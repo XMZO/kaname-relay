@@ -701,4 +701,62 @@ describe('SqliteStore outbox lease methods', () => {
     const bad = await getOutbox(store, 'bad-message');
     expect(bad.lastError).toContain('invalid message_json');
   });
+
+  it('cleans old sent logs, sent outbox, and orphan received events within a limit', async () => {
+    const { store, db } = createHarness();
+    db.prepare(
+      `
+      INSERT INTO received_events (
+        id, source_id, payload_hash, first_seen_at, last_seen_at, committed
+      ) VALUES
+        ('received-old-orphan', 'source-1', 'hash-old-orphan', 1_000, 1_000, 1),
+        ('received-old-linked', 'source-1', 'hash-old-linked', 1_000, 1_000, 1),
+        ('received-new-orphan', 'source-1', 'hash-new-orphan', 90_000, 90_000, 1)
+      `,
+    ).run();
+    db.prepare(
+      `
+      INSERT INTO outbox (
+        id, source_id, received_event_id, channel_id, notifier_type, status,
+        priority, next_at, attempts, max_attempts, outbound_dedupe_key,
+        payload_json, message_json, created_at, updated_at, sent_at
+      ) VALUES (
+        'old-sent-outbox', 'source-1', 'received-old-linked', 'channel-1', 'telegram', 'sent',
+        0, 1_000, 0, 10, 'dedupe-old-sent',
+        '{"ok":true}', '{"text":"hello"}', 1_000, 1_000, 1_000
+      )
+      `,
+    ).run();
+    db.prepare(
+      `
+      INSERT INTO sent_log (
+        id, outbox_id, outbound_dedupe_key, channel_id, notifier_type,
+        provider_message_id, sent_at, created_at
+      ) VALUES (
+        'old-sent-log', 'old-sent-outbox', 'dedupe-old-sent', 'channel-1', 'telegram',
+        'provider-old', 1_000, 1_000
+      )
+      `,
+    ).run();
+
+    await expect(
+      store.cleanupRetention({
+        now: 100_000,
+        sentRetentionMs: 30_000,
+        receivedRetentionMs: 30_000,
+        limit: 10,
+      }),
+    ).resolves.toEqual({
+      sentLogDeleted: 1,
+      outboxDeleted: 1,
+      receivedEventsDeleted: 2,
+    });
+
+    const remainingReceived = db
+      .prepare('SELECT id FROM received_events ORDER BY id')
+      .all() as Array<{ id: string }>;
+    expect(remainingReceived.map((row) => row.id)).toEqual(['received-new-orphan']);
+    expect(db.prepare('SELECT COUNT(*) AS count FROM outbox').get()).toEqual({ count: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM sent_log').get()).toEqual({ count: 0 });
+  });
 });

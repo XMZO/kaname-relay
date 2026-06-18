@@ -1,17 +1,21 @@
 import { Hono, type Context } from 'hono';
 
 import {
+  createAesGcmSecretCodec,
   isSupportedSourceType,
   matchesRule,
+  parseSecretJson,
   processPending,
   parseWebhookSourceEvent,
   renderNotificationMessage,
+  verifyWebhookSignature,
   type JsonObject,
   type JsonValue,
   type Logger,
   type Notifier,
   type ProcessPendingArgs,
   type ProcessPendingResult,
+  type SecretCodec,
 } from '@kaname-relay/core';
 import { createResendNotifier, createTelegramNotifier } from '@kaname-relay/notifiers';
 import { D1Store, type D1DatabaseLike } from '@kaname-relay/store/d1';
@@ -25,6 +29,7 @@ interface AssetFetcher {
 export interface WorkerBindings {
   DB: D1DatabaseLike;
   ASSETS?: AssetFetcher;
+  APP_SECRET?: string;
 }
 
 interface WorkerHonoEnv {
@@ -51,15 +56,37 @@ export interface WorkerProcessOptions {
   sendTimeoutMs?: number;
   maxConcurrency?: number;
   random?: () => number;
+  retention?: RetentionConfig | false;
 }
 
 export interface WorkerAppOptions extends WorkerProcessOptions {
   maxBodyBytes?: number;
   maxAttempts?: number;
+  rateLimit?: RateLimitConfig | false;
+}
+
+export interface RateLimitConfig {
+  windowMs: number;
+  max: number;
+}
+
+export interface RetentionConfig {
+  sentRetentionMs: number;
+  receivedRetentionMs: number;
+  limit: number;
 }
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const DEFAULT_MAX_ATTEMPTS = 10;
+const DEFAULT_RATE_LIMIT: RateLimitConfig = {
+  windowMs: 60_000,
+  max: 120,
+};
+const DEFAULT_RETENTION: RetentionConfig = {
+  sentRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+  receivedRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+  limit: 100,
+};
 
 export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHonoEnv> {
   const app = new Hono<WorkerHonoEnv>();
@@ -67,6 +94,10 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
   const idGenerator = options.idGenerator ?? randomId;
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const rateLimiter =
+    options.rateLimit === false
+      ? null
+      : createMemoryRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
 
   app.onError((error, context) => {
     options.logger?.error?.('worker request failed', {
@@ -79,6 +110,13 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
   app.get('/healthz', (context) => context.json({ ok: true }));
 
   app.post('/hooks/:sourceId', async (context) => {
+    const sourceId = context.req.param('sourceId');
+    const rateKey = `${sourceId}:${clientIp(context.req.raw.headers)}`;
+
+    if (rateLimiter && !rateLimiter.allow(rateKey, now())) {
+      return context.json({ error: 'rate limit exceeded' }, 429);
+    }
+
     const contentLength = numberFromHeader(context.req.header('content-length'));
 
     if (contentLength !== undefined && contentLength > maxBodyBytes) {
@@ -86,7 +124,6 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
     }
 
     const store = new D1Store(context.env.DB);
-    const sourceId = context.req.param('sourceId');
     const source = await store.getEnabledSource(sourceId);
 
     if (!source) {
@@ -103,6 +140,30 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
       return context.json({ error: 'payload too large' }, 413);
     }
 
+    const secretCodec = secretCodecFromEnv(context.env);
+    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
+    const secretOptions: { logger?: Logger; secretCodec?: SecretCodec } = {};
+
+    if (options.logger !== undefined) {
+      secretOptions.logger = options.logger;
+    }
+
+    if (secretCodec !== undefined) {
+      secretOptions.secretCodec = secretCodec;
+    }
+
+    const sourceSecrets = await decryptSecretJson(source.secretJsonEnc, source.id, secretOptions);
+    const verified = await verifyWebhookSignature({
+      rawBody,
+      headers: context.req.raw.headers,
+      config: sourceConfig,
+      secrets: sourceSecrets,
+    });
+
+    if (!verified) {
+      return context.json({ error: 'invalid webhook signature' }, 401);
+    }
+
     const payloadResult = parseJsonObject(rawBody);
 
     if (!payloadResult.ok) {
@@ -111,7 +172,6 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
 
     const receivedAt = now();
     const payloadHash = await sha256Hex(rawBody);
-    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
     const parsedEvent = parseWebhookSourceEvent({
       sourceType: source.type,
       payload: payloadResult.value,
@@ -152,6 +212,7 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
           ...processOptions(options),
           limit: options.limit ?? 10,
           recoverLimit: options.recoverLimit ?? 20,
+          retention: false,
         }),
         options.logger,
       );
@@ -187,17 +248,21 @@ export function runWorkerProcess(
   options: WorkerProcessOptions = {},
 ): Promise<ProcessPendingResult> {
   const store = new D1Store(env.DB);
-  const processStore = new D1ProcessPendingStore(
-    store,
-    options.logger === undefined ? {} : { logger: options.logger },
-  );
+  const secretCodec = secretCodecFromEnv(env);
+  const now = options.now ?? Date.now;
+  const processStore = new D1ProcessPendingStore(store, {
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(secretCodec === undefined
+      ? {}
+      : { decryptSecrets: (secretJsonEnc: string | null) => secretCodec.decrypt(secretJsonEnc) }),
+  });
   const args: ProcessPendingArgs = {
     store: processStore,
     notifiers: options.notifiers ?? {
       resend: createResendNotifier(),
       telegram: createTelegramNotifier(),
     },
-    now: options.now ?? Date.now,
+    now,
     idGenerator: options.idGenerator ?? randomId,
     limit: options.limit ?? 10,
     recoverLimit: options.recoverLimit ?? 20,
@@ -220,7 +285,17 @@ export function runWorkerProcess(
     args.logger = options.logger;
   }
 
-  return processPending(args);
+  return processPending(args).then(async (result) => {
+    if (options.retention !== false) {
+      const retention = options.retention ?? DEFAULT_RETENTION;
+      await store.cleanupRetention({
+        now: now(),
+        ...retention,
+      });
+    }
+
+    return result;
+  });
 }
 
 interface BuildOutboxInput {
@@ -328,6 +403,10 @@ function processOptions(options: WorkerProcessOptions): WorkerProcessOptions {
     selected.random = options.random;
   }
 
+  if (options.retention !== undefined) {
+    selected.retention = options.retention;
+  }
+
   return selected;
 }
 
@@ -388,6 +467,26 @@ function parseStoredJsonObject(raw: string, label: string): JsonObject {
   return parsed;
 }
 
+async function decryptSecretJson(
+  secretJsonEnc: string | null,
+  ownerId: string,
+  options: { logger?: Logger; secretCodec?: SecretCodec },
+): Promise<JsonObject> {
+  if (options.secretCodec) {
+    return options.secretCodec.decrypt(secretJsonEnc);
+  }
+
+  if (!secretJsonEnc) {
+    return {};
+  }
+
+  options.logger?.warn?.('using plaintext source secrets because no secretCodec was configured', {
+    ownerId,
+  });
+
+  return parseSecretJson(secretJsonEnc);
+}
+
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -406,6 +505,61 @@ function numberFromHeader(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+interface MemoryRateLimiter {
+  allow(key: string, now: number): boolean;
+}
+
+function createMemoryRateLimiter(config: RateLimitConfig): MemoryRateLimiter {
+  const buckets = new Map<string, { windowStart: number; count: number }>();
+
+  return {
+    allow(key, now) {
+      const current = buckets.get(key);
+
+      if (!current || now - current.windowStart >= config.windowMs) {
+        buckets.set(key, {
+          windowStart: now,
+          count: 1,
+        });
+        pruneRateLimitBuckets(buckets, now, config.windowMs);
+        return true;
+      }
+
+      if (current.count >= config.max) {
+        return false;
+      }
+
+      current.count += 1;
+      return true;
+    },
+  };
+}
+
+function pruneRateLimitBuckets(
+  buckets: Map<string, { windowStart: number; count: number }>,
+  now: number,
+  windowMs: number,
+): void {
+  if (buckets.size < 1_000) {
+    return;
+  }
+
+  for (const [key, bucket] of buckets.entries()) {
+    if (now - bucket.windowStart >= windowMs) {
+      buckets.delete(key);
+    }
+  }
+}
+
+function clientIp(headers: Headers): string {
+  return (
+    headers.get('cf-connecting-ip') ??
+    headers.get('x-real-ip') ??
+    headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    'unknown'
+  );
+}
+
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
 
@@ -414,6 +568,10 @@ async function sha256Hex(value: string): Promise<string> {
 
 function randomId(): string {
   return crypto.randomUUID();
+}
+
+function secretCodecFromEnv(env: WorkerBindings): SecretCodec | undefined {
+  return env.APP_SECRET ? createAesGcmSecretCodec(env.APP_SECRET) : undefined;
 }
 
 const app = createWorkerApp();

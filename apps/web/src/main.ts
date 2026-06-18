@@ -145,6 +145,14 @@ const app = createApp({
         headers.set('content-type', 'application/json');
       }
 
+      if (isMutatingRequest(init.method) && !headers.has('x-kaname-csrf')) {
+        const csrf = cookieValue('kaname_csrf');
+
+        if (csrf) {
+          headers.set('x-kaname-csrf', csrf);
+        }
+      }
+
       const response = await fetch(path, {
         ...init,
         headers,
@@ -765,4 +773,20 @@ function formatTime(value: number | null | undefined): string {
   }
 
   return new Date(value).toLocaleString();
+}
+
+function isMutatingRequest(method: string | undefined): boolean {
+  const normalized = method?.toUpperCase() ?? 'GET';
+
+  return normalized !== 'GET' && normalized !== 'HEAD' && normalized !== 'OPTIONS';
+}
+
+function cookieValue(name: string): string | undefined {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const cookie = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+
+  return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : undefined;
 }

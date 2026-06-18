@@ -9,6 +9,7 @@ export {
   renderNotificationMessage,
 } from './generic-source.js';
 export { processPending } from './process-pending.js';
+export { createAesGcmSecretCodec, parseSecretJson, verifyWebhookSignature } from './secrets.js';
 export type {
   GenericSourceConfig,
   JsonPathResult,
@@ -16,4 +17,5 @@ export type {
   RenderMessageInput,
   SourceParseInput,
 } from './generic-source.js';
+export type { SecretCodec, VerifyWebhookSignatureInput } from './secrets.js';
 export type * from './types.js';

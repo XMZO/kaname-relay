@@ -33,7 +33,10 @@ import type {
 } from './types.js';
 
 export interface ProcessPendingStoreAdapterOptions {
-  decryptSecrets?: (secretJsonEnc: string | null, channelId: string) => JsonObject;
+  decryptSecrets?: (
+    secretJsonEnc: string | null,
+    channelId: string,
+  ) => JsonObject | Promise<JsonObject>;
   logger?: {
     warn?(message: string, context?: JsonObject): void;
   };
@@ -110,7 +113,7 @@ export class StoreProcessPendingAdapter implements ProcessPendingStore {
       type: row.type,
       enabled: row.enabled,
       config: parseJsonObject(row.configJson, `channels.config_json:${row.id}`),
-      secrets: this.decryptSecrets(row.secretJsonEnc, row.id),
+      secrets: await this.decryptSecrets(row.secretJsonEnc, row.id),
     };
   }
 
@@ -211,7 +214,10 @@ export class StoreProcessPendingAdapter implements ProcessPendingStore {
     return this.store.cancelOutboxByLease(input);
   }
 
-  private decryptSecrets(secretJsonEnc: string | null, channelId: string): JsonObject {
+  private async decryptSecrets(
+    secretJsonEnc: string | null,
+    channelId: string,
+  ): Promise<JsonObject> {
     if (this.options.decryptSecrets) {
       return this.options.decryptSecrets(secretJsonEnc, channelId);
     }
