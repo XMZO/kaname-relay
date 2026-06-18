@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js --external:better-sqlite3 --external:hono --external:hono/* --external:@hono/node-server --external:@hono/node-server/*"
+  },
   "dependencies": {
     "@hono/node-server": "^2.0.5",
     "@kaname-relay/core": "workspace:*",

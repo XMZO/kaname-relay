@@ -19,10 +19,11 @@ import {
   type RuleRecord,
 } from '@kaname-relay/store';
 import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -35,6 +36,7 @@ export interface ServerAppOptions {
   maxBodyBytes?: number;
   maxAttempts?: number;
   notifiers?: Record<string, Notifier | undefined>;
+  webDir?: string | null;
   triggerProcessing?: () => void | Promise<void>;
   logger?: Logger;
 }
@@ -174,6 +176,8 @@ export function createServerApp(options: ServerAppOptions): Hono {
     );
   });
 
+  mountStaticWebUi(app, options.webDir);
+
   return app;
 }
 
@@ -247,6 +251,7 @@ export function createNodeRuntime(
   options: {
     databasePath?: string;
     port?: number;
+    webDir?: string | null;
     logger?: Logger;
   } = {},
 ): {
@@ -261,7 +266,7 @@ export function createNodeRuntime(
   mkdirSync(dirname(databasePath), { recursive: true });
 
   const db = new Database(databasePath);
-  applySqliteMigrations(db);
+  applySqliteMigrations(db, runtimeMigrationsDir());
 
   const store = new SqliteStore(db);
   const notifiers = {
@@ -284,6 +289,7 @@ export function createNodeRuntime(
   const appOptions: ServerAppOptions = {
     store,
     notifiers,
+    webDir: options.webDir === undefined ? defaultWebDir() : options.webDir,
     triggerProcessing: async () => {
       await scheduler.tick();
     },
@@ -305,6 +311,7 @@ export function createNodeRuntime(
       scheduler.start();
       server = serve({
         fetch: app.fetch,
+        hostname: process.env.HOST ?? '0.0.0.0',
         port: options.port ?? numberFromEnv(process.env.PORT) ?? 3000,
       });
     },
@@ -314,6 +321,15 @@ export function createNodeRuntime(
       db.close();
     },
   };
+}
+
+function mountStaticWebUi(app: Hono, webDir: string | null | undefined): void {
+  if (!webDir || !existsSync(webDir)) {
+    return;
+  }
+
+  app.get('/assets/*', serveStatic({ root: webDir }));
+  app.get('/', serveStatic({ root: webDir, path: 'index.html' }));
 }
 
 interface BuildOutboxInput {
@@ -451,6 +467,20 @@ function defaultDatabasePath(): string {
   }
 
   return resolve('data', 'kaname-relay.sqlite');
+}
+
+function runtimeMigrationsDir(): string {
+  return resolve(process.env.KANAME_MIGRATIONS_DIR ?? resolve('packages', 'store', 'migrations'));
+}
+
+function defaultWebDir(): string | null {
+  const fromEnv = process.env.KANAME_WEB_DIR;
+
+  if (fromEnv === 'disabled') {
+    return null;
+  }
+
+  return resolve(fromEnv ?? resolve('apps', 'web', 'dist'));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

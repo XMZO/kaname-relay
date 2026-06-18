@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -155,6 +155,26 @@ function seedNoDedupeWebhookChain(db: Database.Database, now = 1_000): void {
 }
 
 describe('server webhook endpoint', () => {
+  it('serves production WebUI static files when a webDir is configured', async () => {
+    const { dir, store } = createHarness();
+    const webDir = join(dir, 'web');
+    mkdirSync(join(webDir, 'assets'), { recursive: true });
+    writeFileSync(join(webDir, 'index.html'), '<!doctype html><title>Kaname</title>');
+    writeFileSync(join(webDir, 'assets', 'app.js'), 'window.__kaname = true;');
+    const app = createServerApp({
+      store,
+      webDir,
+    });
+
+    const index = await app.request('/');
+    const asset = await app.request('/assets/app.js');
+
+    expect(index.status).toBe(200);
+    await expect(index.text()).resolves.toContain('Kaname');
+    expect(asset.status).toBe(200);
+    await expect(asset.text()).resolves.toContain('__kaname');
+  });
+
   it('accepts a generic webhook, matches rules, renders messages, and enqueues outbox', async () => {
     const { db, store } = createHarness();
     const triggerProcessing = vi.fn();
