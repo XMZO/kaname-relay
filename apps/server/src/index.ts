@@ -26,12 +26,15 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { AdminHttpError, mountAdminRoutes, type AdminRoutesOptions } from './admin.js';
+
 export interface ServerAppOptions {
   store: SqliteStore;
   now?: () => number;
   idGenerator?: () => string;
   maxBodyBytes?: number;
   maxAttempts?: number;
+  notifiers?: Record<string, Notifier | undefined>;
   triggerProcessing?: () => void | Promise<void>;
   logger?: Logger;
 }
@@ -66,7 +69,36 @@ export function createServerApp(options: ServerAppOptions): Hono {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
 
+  app.onError((error, context) => {
+    if (error instanceof AdminHttpError) {
+      return context.json({ error: error.message }, error.status);
+    }
+
+    options.logger?.error?.('request failed', {
+      error: error instanceof Error ? error.message : 'unknown error',
+    });
+
+    return context.json({ error: 'internal server error' }, 500);
+  });
+
   app.get('/healthz', (context) => context.json({ ok: true }));
+
+  const adminOptions: AdminRoutesOptions = {
+    store: options.store,
+    now,
+    idGenerator,
+    notifiers: options.notifiers ?? {},
+  };
+
+  if (options.triggerProcessing !== undefined) {
+    adminOptions.triggerProcessing = options.triggerProcessing;
+  }
+
+  if (options.logger !== undefined) {
+    adminOptions.logger = options.logger;
+  }
+
+  mountAdminRoutes(app, adminOptions);
 
   app.post('/hooks/:sourceId', async (context) => {
     const sourceId = context.req.param('sourceId');
@@ -232,15 +264,16 @@ export function createNodeRuntime(
   applySqliteMigrations(db);
 
   const store = new SqliteStore(db);
+  const notifiers = {
+    telegram: createTelegramNotifier(),
+  };
   const processStore = new SqliteProcessPendingStore(
     store,
     options.logger === undefined ? {} : { logger: options.logger },
   );
   const schedulerOptions: ProcessSchedulerOptions = {
     store: processStore,
-    notifiers: {
-      telegram: createTelegramNotifier(),
-    },
+    notifiers,
   };
 
   if (options.logger !== undefined) {
@@ -250,6 +283,7 @@ export function createNodeRuntime(
   const scheduler = createProcessScheduler(schedulerOptions);
   const appOptions: ServerAppOptions = {
     store,
+    notifiers,
     triggerProcessing: async () => {
       await scheduler.tick();
     },

@@ -2,22 +2,31 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 
 import type {
+  AppSettingRecord,
   CancelOutboxInput,
   ChannelRecord,
+  DashboardStats,
   ClaimDueOutboxInput,
   IngestInput,
   IngestResult,
   InsertSentLogResult,
+  ListOutboxFilters,
   MarkOutboxDeadInput,
   MarkOutboxSentInput,
   NewOutboxItem,
   NewSentLogEntry,
   OutboxItem,
   OutboxStatus,
+  PatchChannelInput,
+  PatchRuleInput,
+  PatchWebhookSourceInput,
   RecoverExpiredLeasesInput,
   RecoverExpiredLeasesResult,
   RuleChannelRecord,
   RuleRecord,
+  SaveChannelInput,
+  SaveRuleInput,
+  SaveWebhookSourceInput,
   ScheduleOutboxRetryInput,
   SentLogEntry,
   WebhookSourceRecord,
@@ -86,6 +95,17 @@ interface RuleChannelRow {
   template_override_json: string | null;
   created_at: number;
   updated_at: number;
+}
+
+interface AppSettingRow {
+  key: string;
+  value_json: string;
+  updated_at: number;
+}
+
+interface StatusCountRow {
+  status: OutboxStatus;
+  count: number;
 }
 
 interface OutboxRow {
@@ -243,6 +263,14 @@ function mapSentLog(row: SentLogFullRow): SentLogEntry {
   };
 }
 
+function mapSetting(row: AppSettingRow): AppSettingRecord {
+  return {
+    key: row.key,
+    valueJson: row.value_json,
+    updatedAt: row.updated_at,
+  };
+}
+
 function bindOutbox(
   item: NewOutboxItem,
   receivedEventId: string,
@@ -289,6 +317,10 @@ export class SqliteStore {
     input: RecoverExpiredLeasesInput,
   ) => RecoverExpiredLeasesResult;
 
+  private readonly saveRuleTx: (input: SaveRuleInput) => RuleRecord;
+
+  private readonly patchRuleTx: (input: PatchRuleInput) => RuleRecord | null;
+
   public constructor(private readonly db: BetterSqlite3.Database) {
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('journal_mode = WAL');
@@ -298,6 +330,8 @@ export class SqliteStore {
     this.recoverExpiredLeasesTx = this.db.transaction((input: RecoverExpiredLeasesInput) =>
       this.recoverExpiredLeasesSync(input),
     );
+    this.saveRuleTx = this.db.transaction((input: SaveRuleInput) => this.saveRuleSync(input));
+    this.patchRuleTx = this.db.transaction((input: PatchRuleInput) => this.patchRuleSync(input));
   }
 
   public ingest(input: IngestInput): Promise<IngestResult> {
@@ -603,6 +637,440 @@ export class SqliteStore {
     return Promise.resolve(row ? mapSentLog(row) : null);
   }
 
+  public getSetting(key: string): Promise<AppSettingRecord | null> {
+    const row = this.db.prepare('SELECT * FROM app_settings WHERE key = ?').get(key) as
+      | AppSettingRow
+      | undefined;
+
+    return Promise.resolve(row ? mapSetting(row) : null);
+  }
+
+  public setSetting(key: string, valueJson: string, now: number): Promise<AppSettingRecord> {
+    const row = this.db
+      .prepare(
+        `
+        INSERT INTO app_settings (key, value_json, updated_at)
+        VALUES (:key, :value_json, :updated_at)
+        ON CONFLICT(key) DO UPDATE SET
+          value_json = excluded.value_json,
+          updated_at = excluded.updated_at
+        RETURNING *
+        `,
+      )
+      .get({
+        key,
+        value_json: valueJson,
+        updated_at: now,
+      }) as AppSettingRow;
+
+    return Promise.resolve(mapSetting(row));
+  }
+
+  public listSources(): Promise<WebhookSourceRecord[]> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM webhook_sources
+        ORDER BY created_at DESC
+        `,
+      )
+      .all() as WebhookSourceRow[];
+
+    return Promise.resolve(rows.map(mapSource));
+  }
+
+  public getSource(id: string): Promise<WebhookSourceRecord | null> {
+    const row = this.db.prepare('SELECT * FROM webhook_sources WHERE id = ?').get(id) as
+      | WebhookSourceRow
+      | undefined;
+
+    return Promise.resolve(row ? mapSource(row) : null);
+  }
+
+  public saveSource(input: SaveWebhookSourceInput): Promise<WebhookSourceRecord> {
+    const row = this.db
+      .prepare(
+        `
+        INSERT INTO webhook_sources (
+          id, name, type, enabled, config_json, secret_json_enc, created_at, updated_at
+        ) VALUES (
+          :id, :name, :type, :enabled, :config_json, :secret_json_enc, :created_at, :updated_at
+        )
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        name: input.name,
+        type: input.type,
+        enabled: input.enabled ? 1 : 0,
+        config_json: input.configJson,
+        secret_json_enc: nullable(input.secretJsonEnc),
+        created_at: input.now,
+        updated_at: input.now,
+      }) as WebhookSourceRow;
+
+    return Promise.resolve(mapSource(row));
+  }
+
+  public patchSource(input: PatchWebhookSourceInput): Promise<WebhookSourceRecord | null> {
+    const existing = this.db.prepare('SELECT * FROM webhook_sources WHERE id = ?').get(input.id) as
+      | WebhookSourceRow
+      | undefined;
+
+    if (!existing) {
+      return Promise.resolve(null);
+    }
+
+    const row = this.db
+      .prepare(
+        `
+        UPDATE webhook_sources
+        SET
+          name = :name,
+          type = :type,
+          enabled = :enabled,
+          config_json = :config_json,
+          secret_json_enc = :secret_json_enc,
+          updated_at = :updated_at
+        WHERE id = :id
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        name: input.name ?? existing.name,
+        type: input.type ?? existing.type,
+        enabled: (input.enabled ?? existing.enabled === 1) ? 1 : 0,
+        config_json: input.configJson ?? existing.config_json,
+        secret_json_enc:
+          input.secretJsonEnc === undefined ? existing.secret_json_enc : input.secretJsonEnc,
+        updated_at: input.now,
+      }) as WebhookSourceRow;
+
+    return Promise.resolve(mapSource(row));
+  }
+
+  public listChannels(): Promise<ChannelRecord[]> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM channels
+        ORDER BY created_at DESC
+        `,
+      )
+      .all() as ChannelRow[];
+
+    return Promise.resolve(rows.map(mapChannel));
+  }
+
+  public getChannelRecord(id: string): Promise<ChannelRecord | null> {
+    const row = this.db.prepare('SELECT * FROM channels WHERE id = ?').get(id) as
+      | ChannelRow
+      | undefined;
+
+    return Promise.resolve(row ? mapChannel(row) : null);
+  }
+
+  public saveChannel(input: SaveChannelInput): Promise<ChannelRecord> {
+    const row = this.db
+      .prepare(
+        `
+        INSERT INTO channels (
+          id, name, type, enabled, config_json, secret_json_enc, created_at, updated_at
+        ) VALUES (
+          :id, :name, :type, :enabled, :config_json, :secret_json_enc, :created_at, :updated_at
+        )
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        name: input.name,
+        type: input.type,
+        enabled: input.enabled ? 1 : 0,
+        config_json: input.configJson,
+        secret_json_enc: nullable(input.secretJsonEnc),
+        created_at: input.now,
+        updated_at: input.now,
+      }) as ChannelRow;
+
+    return Promise.resolve(mapChannel(row));
+  }
+
+  public patchChannel(input: PatchChannelInput): Promise<ChannelRecord | null> {
+    const existing = this.db.prepare('SELECT * FROM channels WHERE id = ?').get(input.id) as
+      | ChannelRow
+      | undefined;
+
+    if (!existing) {
+      return Promise.resolve(null);
+    }
+
+    const row = this.db
+      .prepare(
+        `
+        UPDATE channels
+        SET
+          name = :name,
+          type = :type,
+          enabled = :enabled,
+          config_json = :config_json,
+          secret_json_enc = :secret_json_enc,
+          updated_at = :updated_at
+        WHERE id = :id
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        name: input.name ?? existing.name,
+        type: input.type ?? existing.type,
+        enabled: (input.enabled ?? existing.enabled === 1) ? 1 : 0,
+        config_json: input.configJson ?? existing.config_json,
+        secret_json_enc:
+          input.secretJsonEnc === undefined ? existing.secret_json_enc : input.secretJsonEnc,
+        updated_at: input.now,
+      }) as ChannelRow;
+
+    return Promise.resolve(mapChannel(row));
+  }
+
+  public listRules(): Promise<RuleRecord[]> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM rules
+        ORDER BY priority DESC, created_at DESC
+        `,
+      )
+      .all() as RuleRow[];
+
+    return Promise.resolve(rows.map(mapRule));
+  }
+
+  public getRule(id: string): Promise<RuleRecord | null> {
+    const row = this.db.prepare('SELECT * FROM rules WHERE id = ?').get(id) as RuleRow | undefined;
+
+    return Promise.resolve(row ? mapRule(row) : null);
+  }
+
+  public saveRule(input: SaveRuleInput): Promise<RuleRecord> {
+    return Promise.resolve(this.saveRuleTx(input));
+  }
+
+  public patchRule(input: PatchRuleInput): Promise<RuleRecord | null> {
+    return Promise.resolve(this.patchRuleTx(input));
+  }
+
+  public listRuleChannelsForRules(ruleIds: string[]): Promise<RuleChannelRecord[]> {
+    if (ruleIds.length === 0) {
+      return Promise.resolve([]);
+    }
+
+    const placeholders = ruleIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `
+        SELECT
+          rule_channels.rule_id,
+          rule_channels.channel_id,
+          channels.type AS channel_type,
+          rule_channels.enabled,
+          rule_channels.template_override_json,
+          rule_channels.created_at,
+          rule_channels.updated_at
+        FROM rule_channels
+        INNER JOIN channels ON channels.id = rule_channels.channel_id
+        WHERE rule_channels.rule_id IN (${placeholders})
+        ORDER BY rule_channels.created_at ASC
+        `,
+      )
+      .all(...ruleIds) as RuleChannelRow[];
+
+    return Promise.resolve(rows.map(mapRuleChannel));
+  }
+
+  public listOutbox(filters: ListOutboxFilters = {}): Promise<OutboxItem[]> {
+    const conditions: string[] = [];
+    const params: Record<string, string | number> = {
+      limit: Math.min(Math.max(filters.limit ?? 50, 1), 200),
+    };
+
+    if (filters.status) {
+      conditions.push('status = :status');
+      params.status = filters.status;
+    }
+
+    if (filters.sourceId) {
+      conditions.push('source_id = :source_id');
+      params.source_id = filters.sourceId;
+    }
+
+    if (filters.channelId) {
+      conditions.push('channel_id = :channel_id');
+      params.channel_id = filters.channelId;
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM outbox
+        ${where}
+        ORDER BY created_at DESC
+        LIMIT :limit
+        `,
+      )
+      .all(params) as OutboxRow[];
+
+    return Promise.resolve(rows.map(mapOutbox));
+  }
+
+  public listSentLog(limit = 50): Promise<SentLogEntry[]> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT
+          id, outbox_id, outbound_dedupe_key, channel_id, notifier_type,
+          provider_message_id, provider_response_json, sent_at
+        FROM sent_log
+        ORDER BY sent_at DESC
+        LIMIT ?
+        `,
+      )
+      .all(Math.min(Math.max(limit, 1), 200)) as SentLogFullRow[];
+
+    return Promise.resolve(rows.map(mapSentLog));
+  }
+
+  public cancelOutboxAdmin(id: string, now: number, reason: string): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `
+        UPDATE outbox
+        SET
+          status = 'cancelled',
+          cancelled_at = :now,
+          updated_at = :now,
+          locked_until = NULL,
+          lease_id = NULL,
+          last_error = :reason,
+          last_error_at = :now
+        WHERE id = :id
+          AND status IN ('pending', 'sending')
+        `,
+      )
+      .run({
+        id,
+        now,
+        reason,
+      });
+
+    return Promise.resolve(result.changes === 1);
+  }
+
+  public replayOutbox(id: string, newId: string, now: number): Promise<OutboxItem | null> {
+    const existing = this.db.prepare('SELECT * FROM outbox WHERE id = ?').get(id) as
+      | OutboxRow
+      | undefined;
+
+    if (!existing || !['dead', 'cancelled'].includes(existing.status)) {
+      return Promise.resolve(null);
+    }
+
+    const row = this.db
+      .prepare(
+        `
+        INSERT INTO outbox (
+          id, source_id, received_event_id, rule_id, channel_id, notifier_type,
+          status, priority, next_at, attempts, max_attempts,
+          inbound_dedupe_key, outbound_dedupe_key, provider_idempotency_key,
+          event_type, payload_json, message_json, created_at, updated_at
+        ) VALUES (
+          :id, :source_id, :received_event_id, :rule_id, :channel_id, :notifier_type,
+          'pending', :priority, :next_at, 0, :max_attempts,
+          :inbound_dedupe_key, NULL, NULL,
+          :event_type, :payload_json, :message_json, :created_at, :updated_at
+        )
+        RETURNING *
+        `,
+      )
+      .get({
+        id: newId,
+        source_id: existing.source_id,
+        received_event_id: existing.received_event_id,
+        rule_id: existing.rule_id,
+        channel_id: existing.channel_id,
+        notifier_type: existing.notifier_type,
+        priority: existing.priority,
+        next_at: now,
+        max_attempts: existing.max_attempts,
+        inbound_dedupe_key: existing.inbound_dedupe_key,
+        event_type: existing.event_type,
+        payload_json: existing.payload_json,
+        message_json: existing.message_json,
+        created_at: now,
+        updated_at: now,
+      }) as OutboxRow;
+
+    return Promise.resolve(mapOutbox(row));
+  }
+
+  public getDashboardStats(now: number): Promise<DashboardStats> {
+    const received = this.db
+      .prepare(
+        `
+        SELECT COUNT(*) AS count
+        FROM received_events
+        WHERE last_seen_at >= ?
+        `,
+      )
+      .get(now - 86_400_000) as { count: number };
+    const statusRows = this.db
+      .prepare(
+        `
+        SELECT status, COUNT(*) AS count
+        FROM outbox
+        GROUP BY status
+        `,
+      )
+      .all() as StatusCountRow[];
+    const outboxByStatus: Record<OutboxStatus, number> = {
+      pending: 0,
+      sending: 0,
+      sent: 0,
+      dead: 0,
+      cancelled: 0,
+    };
+
+    for (const row of statusRows) {
+      outboxByStatus[row.status] = row.count;
+    }
+
+    const recentErrors = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM outbox
+        WHERE last_error IS NOT NULL
+        ORDER BY COALESCE(last_error_at, updated_at) DESC
+        LIMIT 10
+        `,
+      )
+      .all() as OutboxRow[];
+
+    return Promise.resolve({
+      receivedLast24h: received.count,
+      outboxByStatus,
+      recentErrors: recentErrors.map(mapOutbox),
+    });
+  }
+
   private ingestSync(input: IngestInput): IngestResult {
     const event = input.receivedEvent;
     const row = this.db
@@ -783,6 +1251,106 @@ export class SqliteStore {
       retried,
       dead: deadResult.changes,
     };
+  }
+
+  private saveRuleSync(input: SaveRuleInput): RuleRecord {
+    const row = this.db
+      .prepare(
+        `
+        INSERT INTO rules (
+          id, source_id, name, enabled, priority, match_json, template_json,
+          stop_on_match, created_at, updated_at
+        ) VALUES (
+          :id, :source_id, :name, :enabled, :priority, :match_json, :template_json,
+          :stop_on_match, :created_at, :updated_at
+        )
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        source_id: nullable(input.sourceId),
+        name: input.name,
+        enabled: input.enabled ? 1 : 0,
+        priority: input.priority,
+        match_json: input.matchJson,
+        template_json: input.templateJson,
+        stop_on_match: input.stopOnMatch ? 1 : 0,
+        created_at: input.now,
+        updated_at: input.now,
+      }) as RuleRow;
+
+    this.replaceRuleChannels(input.id, input.channelIds, input.now);
+
+    return mapRule(row);
+  }
+
+  private patchRuleSync(input: PatchRuleInput): RuleRecord | null {
+    const existing = this.db.prepare('SELECT * FROM rules WHERE id = ?').get(input.id) as
+      | RuleRow
+      | undefined;
+
+    if (!existing) {
+      return null;
+    }
+
+    const row = this.db
+      .prepare(
+        `
+        UPDATE rules
+        SET
+          source_id = :source_id,
+          name = :name,
+          enabled = :enabled,
+          priority = :priority,
+          match_json = :match_json,
+          template_json = :template_json,
+          stop_on_match = :stop_on_match,
+          updated_at = :updated_at
+        WHERE id = :id
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        source_id: input.sourceId === undefined ? existing.source_id : input.sourceId,
+        name: input.name ?? existing.name,
+        enabled: (input.enabled ?? existing.enabled === 1) ? 1 : 0,
+        priority: input.priority ?? existing.priority,
+        match_json: input.matchJson ?? existing.match_json,
+        template_json: input.templateJson ?? existing.template_json,
+        stop_on_match: (input.stopOnMatch ?? existing.stop_on_match === 1) ? 1 : 0,
+        updated_at: input.now,
+      }) as RuleRow;
+
+    if (input.channelIds !== undefined) {
+      this.replaceRuleChannels(input.id, input.channelIds, input.now);
+    }
+
+    return mapRule(row);
+  }
+
+  private replaceRuleChannels(ruleId: string, channelIds: string[], now: number): void {
+    this.db.prepare('DELETE FROM rule_channels WHERE rule_id = ?').run(ruleId);
+
+    const insert = this.db.prepare(
+      `
+      INSERT INTO rule_channels (
+        rule_id, channel_id, enabled, created_at, updated_at
+      ) VALUES (
+        :rule_id, :channel_id, 1, :created_at, :updated_at
+      )
+      `,
+    );
+
+    for (const channelId of channelIds) {
+      insert.run({
+        rule_id: ruleId,
+        channel_id: channelId,
+        created_at: now,
+        updated_at: now,
+      });
+    }
   }
 
   private findSentLogRow(outboxId: string, outboundDedupeKey: string | null): SentLogRow | null {

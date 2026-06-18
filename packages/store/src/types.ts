@@ -47,6 +47,91 @@ export interface RuleChannelRecord {
   updatedAt: UnixMs;
 }
 
+export interface AppSettingRecord {
+  key: string;
+  valueJson: string;
+  updatedAt: UnixMs;
+}
+
+export interface SaveWebhookSourceInput {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  configJson: string;
+  secretJsonEnc?: string | null;
+  now: UnixMs;
+}
+
+export interface PatchWebhookSourceInput {
+  id: string;
+  name?: string;
+  type?: string;
+  enabled?: boolean;
+  configJson?: string;
+  secretJsonEnc?: string | null;
+  now: UnixMs;
+}
+
+export interface SaveChannelInput {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  configJson: string;
+  secretJsonEnc?: string | null;
+  now: UnixMs;
+}
+
+export interface PatchChannelInput {
+  id: string;
+  name?: string;
+  type?: string;
+  enabled?: boolean;
+  configJson?: string;
+  secretJsonEnc?: string | null;
+  now: UnixMs;
+}
+
+export interface SaveRuleInput {
+  id: string;
+  sourceId?: string | null;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  matchJson: string;
+  templateJson: string;
+  stopOnMatch: boolean;
+  channelIds: string[];
+  now: UnixMs;
+}
+
+export interface PatchRuleInput {
+  id: string;
+  sourceId?: string | null;
+  name?: string;
+  enabled?: boolean;
+  priority?: number;
+  matchJson?: string;
+  templateJson?: string;
+  stopOnMatch?: boolean;
+  channelIds?: string[];
+  now: UnixMs;
+}
+
+export interface DashboardStats {
+  receivedLast24h: number;
+  outboxByStatus: Record<OutboxStatus, number>;
+  recentErrors: OutboxItem[];
+}
+
+export interface ListOutboxFilters {
+  status?: OutboxStatus;
+  sourceId?: string;
+  channelId?: string;
+  limit?: number;
+}
+
 export interface NewReceivedEvent {
   id: string;
   sourceId: string;
