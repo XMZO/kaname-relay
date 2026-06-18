@@ -78,13 +78,15 @@ class FakeD1PreparedStatement implements D1PreparedStatementLike {
   }
 
   public execute<T = unknown>(): D1ResultLike<T> {
-    if (/\bRETURNING\b/i.test(this.query)) {
+    const hasReturning = /\bRETURNING\b/i.test(this.query);
+
+    if (hasReturning || /^\s*SELECT\b/i.test(this.query)) {
       const rows = this.db.prepare(this.query).all(...this.values) as T[];
 
       return {
         results: rows,
         meta: {
-          changes: rows.length,
+          changes: hasReturning ? rows.length : 0,
         },
       };
     }

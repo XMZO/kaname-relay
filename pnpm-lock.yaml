@@ -75,7 +75,27 @@ importers:
         specifier: ^3.5.38
         version: 3.5.38(typescript@6.0.3)
 
-  apps/worker: {}
+  apps/worker:
+    dependencies:
+      '@kaname-relay/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@kaname-relay/notifiers':
+        specifier: workspace:*
+        version: link:../../packages/notifiers
+      '@kaname-relay/store':
+        specifier: workspace:*
+        version: link:../../packages/store
+      hono:
+        specifier: ^4.12.25
+        version: 4.12.25
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
 
   packages/core: {}
 

@@ -1,0 +1,16 @@
+name = "kaname-relay"
+main = "src/index.ts"
+compatibility_date = "2026-06-18"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kaname-relay"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../../packages/store/migrations"
+
+[triggers]
+crons = ["* * * * *"]
+
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"

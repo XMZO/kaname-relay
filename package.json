@@ -16,7 +16,7 @@
     ]
   },
   "scripts": {
-    "build": "pnpm --filter @kaname-relay/web build && pnpm --filter @kaname-relay/server build",
+    "build": "pnpm --filter @kaname-relay/web build && pnpm --filter @kaname-relay/server build && pnpm --filter @kaname-relay/worker build",
     "ci": "pnpm typecheck && pnpm test && pnpm lint && pnpm format",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",

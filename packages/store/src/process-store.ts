@@ -15,20 +15,49 @@ import type {
   SentLogEntry as CoreSentLogEntry,
 } from '@kaname-relay/core';
 
+import type { D1Store } from './d1-store.js';
 import type { SqliteStore } from './sqlite-store.js';
-import type { ClaimDueOutboxInput, NewSentLogEntry, OutboxItem } from './types.js';
+import type {
+  CancelOutboxInput,
+  ChannelRecord,
+  ClaimDueOutboxInput,
+  InsertSentLogResult,
+  MarkOutboxDeadInput,
+  MarkOutboxSentInput,
+  NewSentLogEntry,
+  OutboxItem,
+  RecoverExpiredLeasesInput,
+  RecoverExpiredLeasesResult,
+  ScheduleOutboxRetryInput,
+  SentLogEntry,
+} from './types.js';
 
-export interface SqliteProcessPendingStoreOptions {
+export interface ProcessPendingStoreAdapterOptions {
   decryptSecrets?: (secretJsonEnc: string | null, channelId: string) => JsonObject;
   logger?: {
     warn?(message: string, context?: JsonObject): void;
   };
 }
 
-export class SqliteProcessPendingStore implements ProcessPendingStore {
+export type SqliteProcessPendingStoreOptions = ProcessPendingStoreAdapterOptions;
+export type D1ProcessPendingStoreOptions = ProcessPendingStoreAdapterOptions;
+
+interface ProcessPendingBackingStore {
+  recoverExpiredLeases(input: RecoverExpiredLeasesInput): Promise<RecoverExpiredLeasesResult>;
+  claimDueOutbox(input: ClaimDueOutboxInput): Promise<OutboxItem[]>;
+  getEnabledChannelRecord(id: string): Promise<ChannelRecord | null>;
+  findSentLogByDedupeKey(outboundDedupeKey: string): Promise<SentLogEntry | null>;
+  insertSentLog(input: NewSentLogEntry): Promise<InsertSentLogResult>;
+  markOutboxSentByLease(input: MarkOutboxSentInput): Promise<boolean>;
+  scheduleOutboxRetryByLease(input: ScheduleOutboxRetryInput): Promise<boolean>;
+  markOutboxDeadByLease(input: MarkOutboxDeadInput): Promise<boolean>;
+  cancelOutboxByLease(input: CancelOutboxInput): Promise<boolean>;
+}
+
+export class StoreProcessPendingAdapter implements ProcessPendingStore {
   public constructor(
-    private readonly store: SqliteStore,
-    private readonly options: SqliteProcessPendingStoreOptions = {},
+    private readonly store: ProcessPendingBackingStore,
+    private readonly options: ProcessPendingStoreAdapterOptions = {},
   ) {}
 
   public recoverExpiredLeases(
@@ -199,6 +228,18 @@ export class SqliteProcessPendingStore implements ProcessPendingStore {
     );
 
     return parseJsonObject(secretJsonEnc, `channels.secret_json_enc:${channelId}`);
+  }
+}
+
+export class SqliteProcessPendingStore extends StoreProcessPendingAdapter {
+  public constructor(store: SqliteStore, options: SqliteProcessPendingStoreOptions = {}) {
+    super(store, options);
+  }
+}
+
+export class D1ProcessPendingStore extends StoreProcessPendingAdapter {
+  public constructor(store: D1Store, options: D1ProcessPendingStoreOptions = {}) {
+    super(store, options);
   }
 }
 
