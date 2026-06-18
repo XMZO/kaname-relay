@@ -13,6 +13,13 @@ export interface ParsedGenericEvent {
   payload: JsonObject;
 }
 
+export interface SourceParseInput {
+  sourceType: string;
+  payload: JsonObject;
+  config: JsonObject;
+  payloadHash: string;
+}
+
 export interface JsonPathResult {
   exists: boolean;
   value?: JsonValue;
@@ -47,6 +54,42 @@ export function parseGenericEvent(payload: JsonObject, rawConfig: JsonObject): P
     eventType,
     payload,
   };
+}
+
+export function isSupportedSourceType(sourceType: string): boolean {
+  return sourceType === 'generic' || sourceType === 'komari' || sourceType === 'wallos';
+}
+
+export function parseWebhookSourceEvent(input: SourceParseInput): ParsedGenericEvent {
+  if (input.sourceType === 'generic') {
+    return parseGenericEvent(input.payload, input.config);
+  }
+
+  if (input.sourceType === 'komari') {
+    return parseNotificationStyleEvent({
+      sourceType: 'komari',
+      payload: input.payload,
+      config: input.config,
+      payloadHash: input.payloadHash,
+      fallbackEventType: 'komari.notification',
+      messagePaths: ['message', 'text', 'body', 'content', 'description'],
+      titlePaths: ['title', 'name', 'subject'],
+    });
+  }
+
+  if (input.sourceType === 'wallos') {
+    return parseNotificationStyleEvent({
+      sourceType: 'wallos',
+      payload: input.payload,
+      config: input.config,
+      payloadHash: input.payloadHash,
+      fallbackEventType: 'wallos.notification',
+      messagePaths: ['body', 'message', 'text', 'description'],
+      titlePaths: ['title', 'subject', 'subscription_name', 'subscriptionName', 'name'],
+    });
+  }
+
+  throw new Error(`unsupported source type: ${input.sourceType}`);
 }
 
 export function matchesRule(match: JsonValue, payload: JsonObject): boolean {
@@ -146,6 +189,104 @@ export function readJsonPath(root: JsonValue, path: string): JsonPathResult {
   }
 
   return { exists: true, value: current };
+}
+
+interface NotificationStyleInput {
+  sourceType: 'komari' | 'wallos';
+  payload: JsonObject;
+  config: JsonObject;
+  payloadHash: string;
+  fallbackEventType: string;
+  messagePaths: string[];
+  titlePaths: string[];
+}
+
+function parseNotificationStyleEvent(input: NotificationStyleInput): ParsedGenericEvent {
+  const config = genericSourceConfig(input.config);
+  const eventType = eventTypeFor(input.payload, config, input.fallbackEventType);
+  const inboundDedupeKey =
+    configuredDedupeKey(input.payload, config) ??
+    firstKey(input.payload, ['dedupeKey', 'dedupe_key', 'id', 'eventId', 'event_id', 'uuid']) ??
+    `${input.sourceType}:${input.payloadHash}`;
+
+  return {
+    inboundDedupeKey,
+    eventType,
+    payload: normalizeNotificationPayload(input.payload, eventType, {
+      message: firstString(input.payload, input.messagePaths),
+      title: firstString(input.payload, input.titlePaths),
+    }),
+  };
+}
+
+function configuredDedupeKey(payload: JsonObject, config: GenericSourceConfig): string | null {
+  const inboundDedupePath = config.inboundDedupePath ?? config.dedupePath;
+
+  return inboundDedupePath ? jsonValueToKey(readJsonPath(payload, inboundDedupePath).value) : null;
+}
+
+function eventTypeFor(
+  payload: JsonObject,
+  config: GenericSourceConfig,
+  fallbackEventType: string,
+): string {
+  const configured = config.eventTypePath
+    ? jsonValueToKey(readJsonPath(payload, config.eventTypePath).value)
+    : null;
+
+  return (
+    configured ??
+    jsonValueToKey(payload.eventType) ??
+    jsonValueToKey(payload.type) ??
+    config.defaultEventType ??
+    fallbackEventType
+  );
+}
+
+function normalizeNotificationPayload(
+  payload: JsonObject,
+  eventType: string | null,
+  defaults: { title: string | undefined; message: string | undefined },
+): JsonObject {
+  const normalized: JsonObject = { ...payload };
+
+  if (eventType !== null && normalized.eventType === undefined) {
+    normalized.eventType = eventType;
+  }
+
+  if (defaults.title !== undefined && normalized.title === undefined) {
+    normalized.title = defaults.title;
+  }
+
+  if (defaults.message !== undefined && normalized.message === undefined) {
+    normalized.message = defaults.message;
+  }
+
+  return normalized;
+}
+
+function firstKey(payload: JsonObject, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = jsonValueToKey(payload[key]);
+
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function firstString(payload: JsonObject, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = stringOrUndefined(payload[key]);
+
+    if (value !== undefined) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 function genericSourceConfig(config: JsonObject): GenericSourceConfig {

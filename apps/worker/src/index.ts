@@ -1,9 +1,10 @@
 import { Hono, type Context } from 'hono';
 
 import {
+  isSupportedSourceType,
   matchesRule,
-  parseGenericEvent,
   processPending,
+  parseWebhookSourceEvent,
   renderNotificationMessage,
   type JsonObject,
   type JsonValue,
@@ -12,7 +13,7 @@ import {
   type ProcessPendingArgs,
   type ProcessPendingResult,
 } from '@kaname-relay/core';
-import { createTelegramNotifier } from '@kaname-relay/notifiers';
+import { createResendNotifier, createTelegramNotifier } from '@kaname-relay/notifiers';
 import { D1Store, type D1DatabaseLike } from '@kaname-relay/store/d1';
 import { D1ProcessPendingStore } from '@kaname-relay/store/process';
 import type { NewOutboxItem, RuleRecord } from '@kaname-relay/store/types';
@@ -92,7 +93,7 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
       return context.json({ error: 'source not found or disabled' }, 404);
     }
 
-    if (source.type !== 'generic') {
+    if (!isSupportedSourceType(source.type)) {
       return context.json({ error: `unsupported source type: ${source.type}` }, 400);
     }
 
@@ -109,9 +110,14 @@ export function createWorkerApp(options: WorkerAppOptions = {}): Hono<WorkerHono
     }
 
     const receivedAt = now();
-    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
-    const parsedEvent = parseGenericEvent(payloadResult.value, sourceConfig);
     const payloadHash = await sha256Hex(rawBody);
+    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
+    const parsedEvent = parseWebhookSourceEvent({
+      sourceType: source.type,
+      payload: payloadResult.value,
+      config: sourceConfig,
+      payloadHash,
+    });
     const receivedEventId = idGenerator();
     const rules = await store.listEnabledRulesForSource(source.id);
     const outboxItems = await buildOutboxItems({
@@ -188,6 +194,7 @@ export function runWorkerProcess(
   const args: ProcessPendingArgs = {
     store: processStore,
     notifiers: options.notifiers ?? {
+      resend: createResendNotifier(),
       telegram: createTelegramNotifier(),
     },
     now: options.now ?? Date.now,

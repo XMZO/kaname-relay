@@ -154,6 +154,85 @@ function seedNoDedupeWebhookChain(db: Database.Database, now = 1_000): void {
   ).run({ now });
 }
 
+function seedBuiltinSource(
+  db: Database.Database,
+  input: {
+    sourceId: string;
+    sourceType: 'komari' | 'wallos';
+    ruleId: string;
+    templateText: string;
+    configJson?: string;
+  },
+  now = 1_000,
+): void {
+  db.prepare(
+    `
+    INSERT INTO webhook_sources (
+      id, name, type, enabled, config_json, created_at, updated_at
+    ) VALUES (
+      :source_id,
+      :source_id,
+      :source_type,
+      1,
+      :config_json,
+      :now,
+      :now
+    )
+    `,
+  ).run({
+    source_id: input.sourceId,
+    source_type: input.sourceType,
+    config_json: input.configJson ?? '{}',
+    now,
+  });
+
+  db.prepare(
+    `
+    INSERT INTO rules (
+      id, source_id, name, enabled, priority, match_json, template_json,
+      stop_on_match, created_at, updated_at
+    ) VALUES (
+      :rule_id,
+      :source_id,
+      :rule_id,
+      1,
+      10,
+      :match_json,
+      :template_json,
+      0,
+      :now,
+      :now
+    )
+    `,
+  ).run({
+    rule_id: input.ruleId,
+    source_id: input.sourceId,
+    match_json: JSON.stringify({
+      op: 'eq',
+      path: '$.eventType',
+      value: `${input.sourceType}.notification`,
+    }),
+    template_json: JSON.stringify({
+      text: input.templateText,
+      title: '{{eventType}}',
+    }),
+    now,
+  });
+
+  db.prepare(
+    `
+    INSERT INTO rule_channels (
+      rule_id, channel_id, enabled, created_at, updated_at
+    ) VALUES (
+      :rule_id, 'channel-1', 1, :now, :now
+    )
+    `,
+  ).run({
+    rule_id: input.ruleId,
+    now,
+  });
+}
+
 describe('server webhook endpoint', () => {
   it('serves production WebUI static files when a webDir is configured', async () => {
     const { dir, store } = createHarness();
@@ -351,6 +430,98 @@ describe('server webhook endpoint', () => {
 
     expect(receivedCount.count).toBe(2);
     expect(outboxCount.count).toBe(2);
+  });
+
+  it('accepts Komari and Wallos built-in source payloads with source-specific dedupe', async () => {
+    const { db, store } = createHarness();
+    seedBuiltinSource(db, {
+      sourceId: 'source-komari',
+      sourceType: 'komari',
+      ruleId: 'rule-komari',
+      templateText: 'Komari {{payload.title}}: {{payload.message}}',
+    });
+    seedBuiltinSource(db, {
+      sourceId: 'source-wallos',
+      sourceType: 'wallos',
+      ruleId: 'rule-wallos',
+      templateText: 'Wallos {{payload.title}}: {{payload.message}}',
+      configJson: '{"inboundDedupePath":"$.dedupeKey"}',
+    });
+    let id = 0;
+    const app = createServerApp({
+      store,
+      now: () => 10_000,
+      idGenerator: () => `id-${++id}`,
+    });
+    const komariBody = JSON.stringify({
+      title: 'Node down',
+      message: 'node-1 is offline',
+    });
+
+    const firstKomari = await app.request('/hooks/source-komari', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: komariBody,
+    });
+    const duplicateKomari = await app.request('/hooks/source-komari', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: komariBody,
+    });
+    const wallos = await app.request('/hooks/source-wallos', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        dedupeKey: 'wallos:netflix:2026-07-01',
+        title: 'Subscription due',
+        body: 'Netflix renews on 2026-07-01',
+      }),
+    });
+
+    expect(firstKomari.status).toBe(202);
+    expect(duplicateKomari.status).toBe(202);
+    expect(wallos.status).toBe(202);
+    await expect(duplicateKomari.json()).resolves.toMatchObject({
+      duplicate: true,
+      outboxCount: 0,
+    });
+
+    const rows = db
+      .prepare(
+        `
+        SELECT source_id, inbound_dedupe_key, message_json
+        FROM outbox
+        WHERE source_id IN ('source-komari', 'source-wallos')
+        ORDER BY source_id ASC
+        `,
+      )
+      .all() as Array<{
+      source_id: string;
+      inbound_dedupe_key: string;
+      message_json: string;
+    }>;
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.source_id).toBe('source-komari');
+    expect(rows[0]?.inbound_dedupe_key).toMatch(/^komari:/);
+    expect(JSON.parse(rows[0]?.message_json ?? '{}')).toEqual({
+      text: 'Komari Node down: node-1 is offline',
+      title: 'komari.notification',
+    });
+    expect(rows[1]).toMatchObject({
+      source_id: 'source-wallos',
+      inbound_dedupe_key: 'wallos:netflix:2026-07-01',
+    });
+    expect(JSON.parse(rows[1]?.message_json ?? '{}')).toEqual({
+      text: 'Wallos Subscription due: Netflix renews on 2026-07-01',
+      title: 'wallos.notification',
+    });
   });
 
   it('processes a posted webhook through the SQLite process store seam into sent_log', async () => {

@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js --external:better-sqlite3 --external:hono --external:hono/* --external:@hono/node-server --external:@hono/node-server/*"
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js --external:better-sqlite3 --external:nodemailer --external:hono --external:hono/* --external:@hono/node-server --external:@hono/node-server/*"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.5",
@@ -15,6 +15,7 @@
     "@kaname-relay/notifiers": "workspace:*",
     "@kaname-relay/store": "workspace:*",
     "better-sqlite3": "^12.11.1",
-    "hono": "^4.12.25"
+    "hono": "^4.12.25",
+    "nodemailer": "^7.0.13"
   }
 }

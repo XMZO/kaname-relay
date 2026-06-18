@@ -4,9 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./smtp.node": "./src/smtp.node.ts"
   },
   "dependencies": {
-    "@kaname-relay/core": "workspace:*"
+    "@kaname-relay/core": "workspace:*",
+    "nodemailer": "^7.0.13"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.12"
   }
 }

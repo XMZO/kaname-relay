@@ -1,7 +1,8 @@
 import { processPending } from '@kaname-relay/core';
 import {
+  isSupportedSourceType,
   matchesRule,
-  parseGenericEvent,
+  parseWebhookSourceEvent,
   renderNotificationMessage,
   type JsonObject,
   type JsonValue,
@@ -10,7 +11,8 @@ import {
   type ProcessPendingArgs,
   type ProcessPendingResult,
 } from '@kaname-relay/core';
-import { createTelegramNotifier } from '@kaname-relay/notifiers';
+import { createResendNotifier, createTelegramNotifier } from '@kaname-relay/notifiers';
+import { createSmtpNotifier } from '@kaname-relay/notifiers/smtp.node';
 import {
   applySqliteMigrations,
   SqliteProcessPendingStore,
@@ -110,7 +112,7 @@ export function createServerApp(options: ServerAppOptions): Hono {
       return context.json({ error: 'source not found or disabled' }, 404);
     }
 
-    if (source.type !== 'generic') {
+    if (!isSupportedSourceType(source.type)) {
       return context.json({ error: `unsupported source type: ${source.type}` }, 400);
     }
 
@@ -126,9 +128,14 @@ export function createServerApp(options: ServerAppOptions): Hono {
       return context.json({ error: payloadResult.error }, 400);
     }
 
-    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
-    const parsedEvent = parseGenericEvent(payloadResult.value, sourceConfig);
     const payloadHash = createHash('sha256').update(rawBody).digest('hex');
+    const sourceConfig = parseStoredJsonObject(source.configJson, `source config ${source.id}`);
+    const parsedEvent = parseWebhookSourceEvent({
+      sourceType: source.type,
+      payload: payloadResult.value,
+      config: sourceConfig,
+      payloadHash,
+    });
     const receivedEventId = idGenerator();
     const rules = await options.store.listEnabledRulesForSource(source.id);
     const outboxItems = await buildOutboxItems({
@@ -270,6 +277,8 @@ export function createNodeRuntime(
 
   const store = new SqliteStore(db);
   const notifiers = {
+    resend: createResendNotifier(),
+    smtp: createSmtpNotifier(),
     telegram: createTelegramNotifier(),
   };
   const processStore = new SqliteProcessPendingStore(

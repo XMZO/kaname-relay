@@ -125,13 +125,14 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
 
   app.post('/api/admin/sources', async (context) => {
     const body = await readJsonObject(context);
+    const type = stringOrDefault(body.type, 'generic');
     const source = await options.store.saveSource({
       id: stringOrDefault(body.id, options.idGenerator()),
       name: requiredString(body.name, 'name'),
-      type: stringOrDefault(body.type, 'generic'),
+      type,
       enabled: booleanOrDefault(body.enabled, true),
       configJson: JSON.stringify(
-        jsonObjectOrDefault(body.config, DEFAULT_GENERIC_SOURCE_CONFIG, 'config'),
+        jsonObjectOrDefault(body.config, defaultSourceConfig(type), 'config'),
       ),
       secretJsonEnc: secretJsonFromBody(body),
       now: options.now(),
@@ -713,6 +714,27 @@ function secretJsonFromBody(body: JsonObject): string | null {
   }
 
   return JSON.stringify(jsonObject(body.secrets, 'secrets'));
+}
+
+function defaultSourceConfig(type: string): JsonObject {
+  if (type === 'generic') {
+    return DEFAULT_GENERIC_SOURCE_CONFIG;
+  }
+
+  if (type === 'komari') {
+    return {
+      defaultEventType: 'komari.notification',
+    };
+  }
+
+  if (type === 'wallos') {
+    return {
+      defaultEventType: 'wallos.notification',
+      inboundDedupePath: '$.dedupeKey',
+    };
+  }
+
+  return {};
 }
 
 function assertPassword(password: string): void {

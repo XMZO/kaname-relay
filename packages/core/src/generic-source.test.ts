@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { matchesRule } from './generic-source.js';
+import { isSupportedSourceType, matchesRule, parseWebhookSourceEvent } from './generic-source.js';
 
 describe('generic source match DSL', () => {
   it('matches string prefixes and suffixes without enabling regex', () => {
@@ -39,5 +39,63 @@ describe('generic source match DSL', () => {
         },
       ),
     ).toThrow('unsupported match op: regex');
+  });
+});
+
+describe('built-in webhook source parsers', () => {
+  it('parses Komari notification-style payloads with hash fallback dedupe', () => {
+    const event = parseWebhookSourceEvent({
+      sourceType: 'komari',
+      payload: {
+        title: 'Node down',
+        message: 'node-1 is offline',
+      },
+      config: {},
+      payloadHash: 'hash-komari',
+    });
+
+    expect(event).toEqual({
+      inboundDedupeKey: 'komari:hash-komari',
+      eventType: 'komari.notification',
+      payload: {
+        title: 'Node down',
+        message: 'node-1 is offline',
+        eventType: 'komari.notification',
+      },
+    });
+  });
+
+  it('parses Wallos payloads and honors configured dedupe paths', () => {
+    const event = parseWebhookSourceEvent({
+      sourceType: 'wallos',
+      payload: {
+        dedupeKey: 'wallos:netflix:2026-07-01',
+        title: 'Subscription due',
+        body: 'Netflix renews on 2026-07-01',
+      },
+      config: {
+        inboundDedupePath: '$.dedupeKey',
+      },
+      payloadHash: 'hash-wallos',
+    });
+
+    expect(event).toEqual({
+      inboundDedupeKey: 'wallos:netflix:2026-07-01',
+      eventType: 'wallos.notification',
+      payload: {
+        dedupeKey: 'wallos:netflix:2026-07-01',
+        title: 'Subscription due',
+        body: 'Netflix renews on 2026-07-01',
+        message: 'Netflix renews on 2026-07-01',
+        eventType: 'wallos.notification',
+      },
+    });
+  });
+
+  it('advertises supported built-in source types', () => {
+    expect(isSupportedSourceType('generic')).toBe(true);
+    expect(isSupportedSourceType('komari')).toBe(true);
+    expect(isSupportedSourceType('wallos')).toBe(true);
+    expect(isSupportedSourceType('unknown')).toBe(false);
   });
 });
