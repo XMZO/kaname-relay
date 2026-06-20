@@ -1,6 +1,6 @@
 services:
   kaname-relay:
-    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER to your GitHub owner}/kaname-relay:latest
+    image: ${KANAME_IMAGE:-ghcr.io/xmzo/kaname-relay:latest}
     restart: unless-stopped
     ports:
       - '${PORT:-3000}:3000'
