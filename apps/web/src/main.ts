@@ -492,7 +492,11 @@ const app = createApp({
   template: `
     <main v-if="!state.authenticated" class="auth">
       <section class="auth-panel">
-        <h1>Kaname Relay</h1>
+        <div class="auth-brand">
+          <span class="auth-logo"></span>
+          <h1>Kaname Relay</h1>
+          <p>Webhook relay console</p>
+        </div>
         <form class="panel-body" @submit.prevent="submitAuth">
           <label>
             Password
@@ -533,11 +537,11 @@ const app = createApp({
         <template v-if="state.activeTab === 'dashboard'">
           <section class="metrics">
             <div class="metric"><span>Received 24h</span><strong>{{ state.dashboard.receivedLast24h }}</strong></div>
-            <div class="metric"><span>Pending</span><strong>{{ state.dashboard.outboxByStatus.pending }}</strong></div>
-            <div class="metric"><span>Sending</span><strong>{{ state.dashboard.outboxByStatus.sending }}</strong></div>
-            <div class="metric"><span>Sent</span><strong>{{ state.dashboard.outboxByStatus.sent }}</strong></div>
-            <div class="metric"><span>Dead</span><strong>{{ state.dashboard.outboxByStatus.dead }}</strong></div>
-            <div class="metric"><span>Cancelled</span><strong>{{ state.dashboard.outboxByStatus.cancelled }}</strong></div>
+            <div class="metric metric--pending"><span>Pending</span><strong>{{ state.dashboard.outboxByStatus.pending }}</strong></div>
+            <div class="metric metric--sending"><span>Sending</span><strong>{{ state.dashboard.outboxByStatus.sending }}</strong></div>
+            <div class="metric metric--sent"><span>Sent</span><strong>{{ state.dashboard.outboxByStatus.sent }}</strong></div>
+            <div class="metric metric--dead"><span>Dead</span><strong>{{ state.dashboard.outboxByStatus.dead }}</strong></div>
+            <div class="metric metric--cancelled"><span>Cancelled</span><strong>{{ state.dashboard.outboxByStatus.cancelled }}</strong></div>
           </section>
           <section class="panel">
             <div class="panel-header"><h2>Recent Errors</h2></div>
