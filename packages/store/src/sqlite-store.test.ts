@@ -156,6 +156,7 @@ describe('store migration', () => {
       'received_events',
       'rule_channels',
       'rules',
+      'schema_migrations',
       'sent_log',
       'webhook_sources',
     ]);
