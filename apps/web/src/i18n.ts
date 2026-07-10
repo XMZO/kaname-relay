@@ -111,6 +111,7 @@ export const messages = {
         'Secret fields are write-only. Leave them blank while updating to keep the existing secret.',
       smtpOutlook: 'Outlook / Office365 uses smtp.office365.com:587 with STARTTLS and LOGIN auth.',
       advancedJson: 'Advanced JSON',
+      saveBeforeTest: 'Create the channel before testing it.',
     },
     buttons: {
       create: 'Create',
@@ -284,6 +285,7 @@ export const messages = {
       writeOnlySecrets: '密钥字段只写不回显。更新已有渠道时留空会保留旧密钥。',
       smtpOutlook: 'Outlook / Office365 使用 smtp.office365.com:587，开启 STARTTLS 和 LOGIN 认证。',
       advancedJson: '高级 JSON',
+      saveBeforeTest: '请先创建渠道，再进行测试。',
     },
     buttons: {
       create: '创建',

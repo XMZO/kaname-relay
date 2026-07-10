@@ -442,10 +442,11 @@ const app = createApp({
       await run(async () => {
         const body = channelRequestBody(state.channelForm);
 
-        await request('/api/admin/channels', {
+        const data = await request<{ channel: ChannelRow }>('/api/admin/channels', {
           method: 'POST',
           body: JSON.stringify(body),
         });
+        editChannel(data.channel);
         await loadChannels();
       }, t.value.messages.channelSaved);
     }
@@ -705,6 +706,10 @@ const app = createApp({
       return t.value.channelTypes[type];
     }
 
+    function channelExists(channelId = state.channelForm.id): boolean {
+      return channelId.length > 0 && state.channels.some((channel) => channel.id === channelId);
+    }
+
     function applyChannelTypePreset(): void {
       const preset = channelTypePresets[state.channelForm.type];
 
@@ -744,6 +749,7 @@ const app = createApp({
       sourceDedupeWarning,
       nullableText,
       channelTypeLabel,
+      channelExists,
       applyChannelTypePreset,
       applyOutlookSmtpPreset,
       setTab,
@@ -967,9 +973,9 @@ const app = createApp({
                 <label class="wide"><span>{{ t.labels.testText }}</span><input v-model="state.channelForm.testText" /></label>
                 <div class="actions wide">
                   <button class="primary" type="submit">{{ t.buttons.create }}</button>
-                  <button type="button" @click="patchChannel()">{{ t.buttons.update }}</button>
-                  <button type="button" @click="testChannel()">{{ t.buttons.test }}</button>
-                  <button type="button" @click="patchChannel(false)">{{ t.buttons.disable }}</button>
+                  <button type="button" :disabled="!channelExists()" @click="patchChannel()">{{ t.buttons.update }}</button>
+                  <button type="button" :disabled="!channelExists()" :title="channelExists() ? '' : t.channelHelp.saveBeforeTest" @click="testChannel()">{{ t.buttons.test }}</button>
+                  <button type="button" :disabled="!channelExists()" @click="patchChannel(false)">{{ t.buttons.disable }}</button>
                 </div>
               </div>
             </form>
