@@ -394,7 +394,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
       matchJson: JSON.stringify(jsonObjectOrDefault(body.match, {}, 'match')),
       templateJson: JSON.stringify(jsonObjectOrDefault(body.template, {}, 'template')),
       stopOnMatch: booleanOrDefault(body.stopOnMatch, false),
-      channelIds: stringArrayOrDefault(body.channelIds, []),
+      channelIds: uniqueStrings(stringArrayOrDefault(body.channelIds, [])),
       now: options.now(),
     };
     const sourceId = optionalNullableString(body.sourceId, 'sourceId');
@@ -402,6 +402,8 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     if (sourceId !== undefined) {
       input.sourceId = sourceId;
     }
+
+    await assertRuleReferences(options.store, sourceId, input.channelIds);
 
     const rule = await options.store.saveRule(input);
     const ruleChannels = await options.store.listRuleChannelsForRules([rule.id]);
@@ -450,8 +452,10 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     }
 
     if (body.channelIds !== undefined) {
-      patch.channelIds = stringArrayOrDefault(body.channelIds, []);
+      patch.channelIds = uniqueStrings(stringArrayOrDefault(body.channelIds, []));
     }
+
+    await assertRuleReferences(options.store, sourceId, patch.channelIds);
 
     const rule = await options.store.patchRule(patch);
 
@@ -926,6 +930,29 @@ function ruleResponse(
   };
 }
 
+async function assertRuleReferences(
+  store: SqliteStore,
+  sourceId: string | null | undefined,
+  channelIds: string[] | undefined,
+): Promise<void> {
+  if (sourceId && !(await store.getSource(sourceId))) {
+    throw new AdminHttpError(400, `unknown source ID: ${sourceId}`);
+  }
+
+  if (!channelIds || channelIds.length === 0) {
+    return;
+  }
+
+  const channels = await Promise.all(
+    channelIds.map((channelId) => store.getChannelRecord(channelId)),
+  );
+  const missing = channelIds.filter((_channelId, index) => channels[index] === null);
+
+  if (missing.length > 0) {
+    throw new AdminHttpError(400, `unknown channel IDs: ${missing.join(', ')}`);
+  }
+}
+
 async function channelConfig(
   channel: ChannelRecord,
   options: AdminRoutesOptions,
@@ -1103,6 +1130,10 @@ function stringArrayOrDefault(value: JsonValue | undefined, fallback: string[]):
   }
 
   return value;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function jsonObjectOrDefault(

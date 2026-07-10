@@ -374,6 +374,66 @@ pre {
   grid-column: 1 / -1;
 }
 
+.field-group {
+  display: grid;
+  gap: 6px;
+}
+
+.field-label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.choice-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.choice-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.choice-row:last-child {
+  border-bottom: 0;
+}
+
+.choice-row:hover {
+  background: var(--surface-2);
+}
+
+.choice-row input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+
+.choice-copy {
+  display: grid;
+  min-width: 0;
+  color: var(--text);
+}
+
+.choice-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.choice-copy small {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -382,6 +442,7 @@ pre {
 
 .inline-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);

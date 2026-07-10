@@ -208,11 +208,7 @@ function seedBuiltinSource(
   ).run({
     rule_id: input.ruleId,
     source_id: input.sourceId,
-    match_json: JSON.stringify({
-      op: 'eq',
-      path: '$.eventType',
-      value: `${input.sourceType}.notification`,
-    }),
+    match_json: '{}',
     template_json: JSON.stringify({
       text: input.templateText,
       title: '{{eventType}}',
@@ -634,13 +630,14 @@ describe('server webhook endpoint', () => {
     });
     const wallos = await app.request('/hooks/source-wallos', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
       body: JSON.stringify({
-        dedupeKey: 'wallos:netflix:2026-07-01',
-        title: 'Subscription due',
-        body: 'Netflix renews on 2026-07-01',
+        eventType: 'wallos.payment_due',
+        dedupeKey: 'wallos:payment:netflix:2026-07-01:5',
+        title: 'Netflix',
+        message: 'Netflix renews in 5 days for 10.00 USD',
+        subscriptionName: 'Netflix',
+        date: '2026-07-01',
+        daysUntil: '5',
       }),
     });
 
@@ -676,11 +673,11 @@ describe('server webhook endpoint', () => {
     });
     expect(rows[1]).toMatchObject({
       source_id: 'source-wallos',
-      inbound_dedupe_key: 'wallos:netflix:2026-07-01',
+      inbound_dedupe_key: 'wallos:payment:netflix:2026-07-01:5',
     });
     expect(JSON.parse(rows[1]?.message_json ?? '{}')).toEqual({
-      text: 'Wallos Subscription due: Netflix renews on 2026-07-01',
-      title: 'wallos.notification',
+      text: 'Wallos Netflix: Netflix renews in 5 days for 10.00 USD',
+      title: 'wallos.payment_due',
     });
   });
 

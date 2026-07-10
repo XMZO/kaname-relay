@@ -43,6 +43,7 @@ export const messages = {
       recentErrors: 'Recent Errors',
       source: 'Source',
       sources: 'Sources',
+      upstreamTemplate: 'Upstream Webhook Template',
       channel: 'Channel',
       channels: 'Channels',
       rule: 'Rule',
@@ -74,6 +75,20 @@ export const messages = {
       retryJson: 'Retry defaults JSON',
       currentPassword: 'Current password',
       newPassword: 'New password',
+    },
+    sourceTypes: {
+      generic: 'Generic JSON',
+      komari: 'Komari',
+      wallos: 'Wallos',
+    },
+    sourceHelp: {
+      preset:
+        'Selecting a built-in source applies its parser defaults. Advanced JSON remains editable.',
+      komariSetup:
+        'Use these values in Komari webhook sender settings. Komari has no stable event ID, so retry dedupe uses the payload hash.',
+      wallosSetup:
+        'Use these values in Wallos webhook notifications. Leave custom headers empty; Kaname accepts the JSON body without a Content-Type header.',
+      rulePreset: 'Apply the selected source match, message template, and sample payload.',
     },
     channelTypes: {
       telegram: 'Telegram',
@@ -116,6 +131,8 @@ export const messages = {
     buttons: {
       create: 'Create',
       update: 'Update',
+      applyPreset: 'Apply preset',
+      enable: 'Enable',
       disable: 'Disable',
       edit: 'Edit',
       test: 'Test',
@@ -159,6 +176,7 @@ export const messages = {
     common: {
       enabled: 'Enabled',
       disabled: 'Disabled',
+      allSources: 'All sources',
       set: 'set',
       empty: 'empty',
       default: 'default',
@@ -168,6 +186,9 @@ export const messages = {
     messages: {
       requestFailed: 'Request failed',
       jsonMustBeObject: 'JSON must be an object',
+      unknownSourceId: 'Unknown source ID',
+      unknownChannelIds: 'Unknown channel IDs',
+      createChannelFirst: 'Create at least one channel before assigning a rule.',
       sourceSaved: 'Source saved',
       sourceUpdated: 'Source updated',
       channelSaved: 'Channel saved',
@@ -219,6 +240,7 @@ export const messages = {
       recentErrors: '最近错误',
       source: '来源',
       sources: '来源',
+      upstreamTemplate: '上游 Webhook 模板',
       channel: '渠道',
       channels: '渠道',
       rule: '规则',
@@ -250,6 +272,19 @@ export const messages = {
       retryJson: '重试默认值 JSON',
       currentPassword: '当前密码',
       newPassword: '新密码',
+    },
+    sourceTypes: {
+      generic: '通用 JSON',
+      komari: 'Komari',
+      wallos: 'Wallos',
+    },
+    sourceHelp: {
+      preset: '选择内置来源后会套用对应解析默认值，高级 JSON 仍可继续修改。',
+      komariSetup:
+        '把以下参数填入 Komari 的 Webhook 发送设置。Komari 没有稳定事件 ID，因此重试去重使用载荷哈希。',
+      wallosSetup:
+        '把以下参数填入 Wallos 的 Webhook 通知设置。自定义标头留空即可，Kaname 不依赖 Content-Type 也能解析 JSON。',
+      rulePreset: '套用所选来源的匹配条件、消息模板和示例载荷。',
     },
     channelTypes: {
       telegram: 'Telegram',
@@ -290,6 +325,8 @@ export const messages = {
     buttons: {
       create: '创建',
       update: '更新',
+      applyPreset: '套用预设',
+      enable: '启用',
       disable: '禁用',
       edit: '编辑',
       test: '测试',
@@ -333,6 +370,7 @@ export const messages = {
     common: {
       enabled: '启用',
       disabled: '禁用',
+      allSources: '所有来源',
       set: '已设置',
       empty: '为空',
       default: '默认',
@@ -342,6 +380,9 @@ export const messages = {
     messages: {
       requestFailed: '请求失败',
       jsonMustBeObject: 'JSON 必须是对象',
+      unknownSourceId: '来源 ID 不存在',
+      unknownChannelIds: '渠道 ID 不存在',
+      createChannelFirst: '请先创建至少一个渠道，再为规则选择渠道。',
       sourceSaved: '来源已保存',
       sourceUpdated: '来源已更新',
       channelSaved: '渠道已保存',

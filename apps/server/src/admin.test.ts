@@ -254,6 +254,166 @@ describe('admin API', () => {
     );
   });
 
+  it('rejects rules that reference missing sources or channels with a readable 400', async () => {
+    const { store } = createHarness();
+    const app = createServerApp({
+      store,
+      now: () => 12_000,
+      idGenerator: () => 'generated-id',
+    });
+    const auth = await initialize(app);
+
+    const missingSource = await app.request('/api/admin/rules', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'rule-missing-source',
+        sourceId: 'source-does-not-exist',
+        name: 'Missing source',
+        match: {},
+        template: { text: 'test' },
+        channelIds: [],
+      }),
+    });
+    expect(missingSource.status).toBe(400);
+    await expect(missingSource.json()).resolves.toEqual({
+      error: 'unknown source ID: source-does-not-exist',
+    });
+
+    await app.request('/api/admin/sources', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'source-valid',
+        name: 'Valid source',
+        type: 'komari',
+        config: {},
+      }),
+    });
+    const missingChannel = await app.request('/api/admin/rules', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'rule-missing-channel',
+        sourceId: 'source-valid',
+        name: 'Missing channel',
+        match: {},
+        template: { text: 'test' },
+        channelIds: ['5370698809'],
+      }),
+    });
+    expect(missingChannel.status).toBe(400);
+    await expect(missingChannel.json()).resolves.toEqual({
+      error: 'unknown channel IDs: 5370698809',
+    });
+    await expect(store.getRule('rule-missing-source')).resolves.toBeNull();
+    await expect(store.getRule('rule-missing-channel')).resolves.toBeNull();
+  });
+
+  it('applies built-in Komari and Wallos source defaults when config is omitted', async () => {
+    const { store } = createHarness();
+    const app = createServerApp({
+      store,
+      now: () => 12_500,
+      idGenerator: () => 'generated-id',
+    });
+    const auth = await initialize(app);
+
+    const komari = await app.request('/api/admin/sources', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'source-komari-default',
+        name: 'Komari',
+        type: 'komari',
+      }),
+    });
+    expect(komari.status).toBe(201);
+    await expect(komari.json()).resolves.toMatchObject({
+      source: {
+        type: 'komari',
+        config: {
+          defaultEventType: 'komari.notification',
+        },
+      },
+    });
+
+    const wallos = await app.request('/api/admin/sources', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'source-wallos-default',
+        name: 'Wallos',
+        type: 'wallos',
+      }),
+    });
+    expect(wallos.status).toBe(201);
+    await expect(wallos.json()).resolves.toMatchObject({
+      source: {
+        type: 'wallos',
+        config: {
+          defaultEventType: 'wallos.notification',
+          inboundDedupePath: '$.dedupeKey',
+        },
+      },
+    });
+  });
+
+  it('toggles a channel without replacing its config or secrets', async () => {
+    const { store } = createHarness();
+    const app = createServerApp({
+      store,
+      now: () => 13_000,
+      idGenerator: () => 'generated-id',
+    });
+    const auth = await initialize(app);
+
+    await app.request('/api/admin/channels', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'channel-toggle',
+        name: 'Toggle channel',
+        type: 'telegram',
+        config: { chatId: '5370698809' },
+        secrets: { botToken: 'keep-this-token' },
+      }),
+    });
+    const before = await store.getChannelRecord('channel-toggle');
+
+    const disabled = await app.request('/api/admin/channels/channel-toggle', {
+      method: 'PATCH',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(disabled.status).toBe(200);
+    await expect(disabled.json()).resolves.toMatchObject({
+      channel: {
+        id: 'channel-toggle',
+        enabled: false,
+        config: { chatId: '5370698809' },
+        hasSecret: true,
+      },
+    });
+
+    const afterDisable = await store.getChannelRecord('channel-toggle');
+    expect(afterDisable?.configJson).toBe(before?.configJson);
+    expect(afterDisable?.secretJsonEnc).toBe(before?.secretJsonEnc);
+
+    const enabled = await app.request('/api/admin/channels/channel-toggle', {
+      method: 'PATCH',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(enabled.status).toBe(200);
+    await expect(enabled.json()).resolves.toMatchObject({
+      channel: {
+        id: 'channel-toggle',
+        enabled: true,
+      },
+    });
+  });
+
   it('manages settings and changes the admin password', async () => {
     const { store } = createHarness();
     const app = createServerApp({

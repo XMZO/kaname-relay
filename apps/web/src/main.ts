@@ -5,6 +5,113 @@ import './styles.css';
 
 type JsonRecord = Record<string, unknown>;
 
+const sourceTypes = ['generic', 'komari', 'wallos'] as const;
+type SourceType = (typeof sourceTypes)[number];
+
+interface SourceTypePreset {
+  config: JsonRecord;
+  match: JsonRecord;
+  template: JsonRecord;
+  samplePayload: JsonRecord;
+}
+
+const sourceTypePresets: Record<SourceType, SourceTypePreset> = {
+  generic: {
+    config: {
+      inboundDedupePath: '$.id',
+      eventTypePath: '$.eventType',
+    },
+    match: {
+      op: 'eq',
+      path: '$.eventType',
+      value: 'demo',
+    },
+    template: {
+      text: 'Hello {{payload.name}}',
+      title: '{{eventType}}',
+    },
+    samplePayload: {
+      id: 'evt-1',
+      eventType: 'demo',
+      name: 'Ada',
+    },
+  },
+  komari: {
+    config: {
+      defaultEventType: 'komari.notification',
+    },
+    match: {},
+    template: {
+      text: '{{payload.message}}',
+      title: '{{payload.title}}',
+    },
+    samplePayload: {
+      title: 'Node down',
+      message: 'node-1 is offline',
+    },
+  },
+  wallos: {
+    config: {
+      defaultEventType: 'wallos.notification',
+      inboundDedupePath: '$.dedupeKey',
+    },
+    match: {},
+    template: {
+      text: '{{payload.message}}',
+      title: '{{payload.title}}',
+    },
+    samplePayload: {
+      eventType: 'wallos.payment_due',
+      title: 'Netflix',
+      message: 'Netflix renews in 5 days for 10.00 USD',
+      dedupeKey: 'wallos:payment:netflix:2026-07-15:5',
+      subscriptionName: 'Netflix',
+      price: '10.00',
+      currency: 'USD',
+      date: '2026-07-15',
+      daysUntil: '5',
+    },
+  },
+};
+
+const komariWebhookBody = {
+  title: '{{title}}',
+  message: '{{message}}',
+};
+
+const wallosPaymentWebhookBody = {
+  eventType: 'wallos.payment_due',
+  title: '{{subscription_name}}',
+  message:
+    '{{subscription_name}} renews in {{days_until}} days for {{subscription_price}} {{subscription_currency}}',
+  dedupeKey: 'wallos:payment:{{subscription_name}}:{{subscription_date}}:{{days_until}}',
+  subscriptionName: '{{subscription_name}}',
+  price: '{{subscription_price}}',
+  currency: '{{subscription_currency}}',
+  category: '{{subscription_category}}',
+  date: '{{subscription_date}}',
+  payer: '{{subscription_payer}}',
+  daysUntil: '{{days_until}}',
+  billingCycleDays: '{{subscription_days_until_payment}}',
+  notes: '{{subscription_notes}}',
+  url: '{{subscription_url}}',
+};
+
+const wallosCancellationWebhookBody = {
+  eventType: 'wallos.cancellation',
+  title: '{{subscription_name}} cancellation',
+  message: '{{subscription_name}} is scheduled for cancellation on {{subscription_date}}',
+  dedupeKey: 'wallos:cancellation:{{subscription_name}}:{{subscription_date}}',
+  subscriptionName: '{{subscription_name}}',
+  price: '{{subscription_price}}',
+  currency: '{{subscription_currency}}',
+  category: '{{subscription_category}}',
+  date: '{{subscription_date}}',
+  payer: '{{subscription_payer}}',
+  notes: '{{subscription_notes}}',
+  url: '{{subscription_url}}',
+};
+
 const channelTypes = ['telegram', 'resend', 'smtp', 'webhook'] as const;
 type ChannelType = (typeof channelTypes)[number];
 type TriStateBoolean = '' | 'true' | 'false';
@@ -175,6 +282,7 @@ type Tab = (typeof tabs)[number];
 type StatusKey = keyof (typeof messages)[Locale]['status'];
 
 const languageStorageKey = 'kaname-relay-language';
+const activeTabStorageKey = 'kaname-relay-active-tab';
 
 const app = createApp({
   setup() {
@@ -184,7 +292,7 @@ const app = createApp({
       initialized: false,
       authenticated: false,
       password: '',
-      activeTab: 'dashboard' as Tab,
+      activeTab: initialTab(),
       loading: false,
       notice: '',
       error: '',
@@ -216,10 +324,7 @@ const app = createApp({
         name: '',
         type: 'generic',
         enabled: true,
-        configText: pretty({
-          inboundDedupePath: '$.id',
-          eventTypePath: '$.eventType',
-        }),
+        configText: pretty(sourceTypePresets.generic.config),
         secretsText: '{}',
       },
       channelForm: createChannelForm(),
@@ -230,21 +335,10 @@ const app = createApp({
         enabled: true,
         priority: 0,
         stopOnMatch: false,
-        matchText: pretty({
-          op: 'eq',
-          path: '$.eventType',
-          value: 'demo',
-        }),
-        templateText: pretty({
-          text: 'Hello {{payload.name}}',
-          title: '{{eventType}}',
-        }),
+        matchText: pretty(sourceTypePresets.generic.match),
+        templateText: pretty(sourceTypePresets.generic.template),
         channelIdsText: '',
-        samplePayloadText: pretty({
-          id: 'evt-1',
-          eventType: 'demo',
-          name: 'Ada',
-        }),
+        samplePayloadText: pretty(sourceTypePresets.generic.samplePayload),
       },
       settingsForm: {
         retentionText: '{}',
@@ -304,9 +398,19 @@ const app = createApp({
         return t.value.messages.requestFailed;
       }
 
-      return error.message === 'JSON must be an object'
-        ? t.value.messages.jsonMustBeObject
-        : error.message;
+      if (error.message === 'JSON must be an object') {
+        return t.value.messages.jsonMustBeObject;
+      }
+
+      if (error.message.startsWith('unknown source ID:')) {
+        return `${t.value.messages.unknownSourceId}: ${error.message.slice('unknown source ID:'.length).trim()}`;
+      }
+
+      if (error.message.startsWith('unknown channel IDs:')) {
+        return `${t.value.messages.unknownChannelIds}: ${error.message.slice('unknown channel IDs:'.length).trim()}`;
+      }
+
+      return error.message;
     }
 
     async function refreshStatus(): Promise<void> {
@@ -343,7 +447,18 @@ const app = createApp({
 
     async function setTab(tab: Tab): Promise<void> {
       state.activeTab = tab;
+
+      try {
+        sessionStorage.setItem(activeTabStorageKey, tab);
+      } catch {
+        // Navigation still works when storage is unavailable.
+      }
+
       await loadTab(tab);
+    }
+
+    async function refreshCurrentTab(): Promise<void> {
+      await run(async () => loadTab(state.activeTab));
     }
 
     async function loadTab(tab: Tab): Promise<void> {
@@ -380,7 +495,7 @@ const app = createApp({
 
     async function saveSource(): Promise<void> {
       await run(async () => {
-        await request('/api/admin/sources', {
+        const data = await request<{ source: SourceRow }>('/api/admin/sources', {
           method: 'POST',
           body: JSON.stringify({
             id: optionalText(state.sourceForm.id),
@@ -391,6 +506,7 @@ const app = createApp({
             secrets: parseJsonObject(state.sourceForm.secretsText),
           }),
         });
+        editSource(data.source);
         await loadSources();
       }, t.value.messages.sourceSaved);
     }
@@ -399,7 +515,7 @@ const app = createApp({
       state.sourceForm = {
         id: source.id,
         name: source.name,
-        type: source.type,
+        type: sourceTypeOrDefault(source.type),
         enabled: source.enabled,
         configText: pretty(source.config),
         secretsText: '{}',
@@ -472,6 +588,24 @@ const app = createApp({
           method: 'PATCH',
           body: JSON.stringify(body),
         });
+        await loadChannels();
+      }, t.value.messages.channelUpdated);
+    }
+
+    async function setChannelEnabled(
+      enabled: boolean,
+      channelId = state.channelForm.id,
+    ): Promise<void> {
+      await run(async () => {
+        await request(`/api/admin/channels/${channelId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ enabled }),
+        });
+
+        if (state.channelForm.id === channelId) {
+          state.channelForm.enabled = enabled;
+        }
+
         await loadChannels();
       }, t.value.messages.channelUpdated);
     }
@@ -680,6 +814,97 @@ const app = createApp({
       return value ? t.value.common.set : t.value.common.empty;
     }
 
+    function sourceTypeLabel(type: SourceType): string {
+      return t.value.sourceTypes[type];
+    }
+
+    function applySourceTypePreset(): void {
+      const type = sourceTypeOrDefault(state.sourceForm.type);
+      const preset = sourceTypePresets[type];
+      state.sourceForm.type = type;
+      state.sourceForm.configText = pretty(preset.config);
+      state.sourceForm.secretsText = '{}';
+
+      if (type !== 'generic' && state.sourceForm.id.trim().length === 0) {
+        state.sourceForm.id = type;
+      }
+
+      if (type !== 'generic' && state.sourceForm.name.trim().length === 0) {
+        state.sourceForm.name = sourceTypeLabel(type);
+      }
+    }
+
+    function selectedRuleSourceType(): SourceType | null {
+      const source = state.sources.find((item) => item.id === state.ruleForm.sourceId);
+
+      return source && isSourceType(source.type) ? source.type : null;
+    }
+
+    function applyRuleSourcePreset(): void {
+      const type = selectedRuleSourceType();
+
+      if (!type) {
+        return;
+      }
+
+      const preset = sourceTypePresets[type];
+      state.ruleForm.matchText = pretty(preset.match);
+      state.ruleForm.templateText = pretty(preset.template);
+      state.ruleForm.samplePayloadText = pretty(preset.samplePayload);
+    }
+
+    function sourceSetupHelp(): string {
+      return state.sourceForm.type === 'komari'
+        ? t.value.sourceHelp.komariSetup
+        : t.value.sourceHelp.wallosSetup;
+    }
+
+    function sourceUpstreamSetup(): string {
+      const endpoint = sourceWebhookEndpoint();
+
+      if (state.sourceForm.type === 'komari') {
+        return [
+          `url: ${endpoint}`,
+          'method: POST',
+          'content_type: application/json',
+          'headers: {}',
+          'body:',
+          pretty(komariWebhookBody),
+          'username:',
+          'password:',
+        ].join('\n');
+      }
+
+      if (state.sourceForm.type === 'wallos') {
+        return [
+          `webhook_url: ${endpoint}`,
+          'request_method: POST',
+          'custom_headers:',
+          'payment_payload:',
+          pretty(wallosPaymentWebhookBody),
+          'cancelation_payload:',
+          pretty(wallosCancellationWebhookBody),
+          'ignore_ssl: false',
+        ].join('\n');
+      }
+
+      return '';
+    }
+
+    function sourceWebhookEndpoint(): string {
+      const existing = state.sources.find((source) => source.id === state.sourceForm.id);
+
+      if (existing) {
+        return webhookUrl(existing.webhookPath);
+      }
+
+      const sourceId = state.sourceForm.id.trim();
+
+      return sourceId.length > 0
+        ? `${window.location.origin}/hooks/${encodeURIComponent(sourceId)}`
+        : `${window.location.origin}/hooks/<source-id>`;
+    }
+
     function sourceDedupeWarning(): boolean {
       if (state.sourceForm.type !== 'generic') {
         return false;
@@ -710,6 +935,35 @@ const app = createApp({
       return channelId.length > 0 && state.channels.some((channel) => channel.id === channelId);
     }
 
+    function channelIsEnabled(channelId = state.channelForm.id): boolean {
+      return (
+        state.channels.find((channel) => channel.id === channelId)?.enabled ??
+        state.channelForm.enabled
+      );
+    }
+
+    function isRuleChannelSelected(channelId: string): boolean {
+      return splitList(state.ruleForm.channelIdsText).includes(channelId);
+    }
+
+    function toggleRuleChannel(channelId: string, event: Event): void {
+      const target = event.target;
+
+      if (!(target instanceof HTMLInputElement)) {
+        return;
+      }
+
+      const selected = new Set(splitList(state.ruleForm.channelIdsText));
+
+      if (target.checked) {
+        selected.add(channelId);
+      } else {
+        selected.delete(channelId);
+      }
+
+      state.ruleForm.channelIdsText = [...selected].join(', ');
+    }
+
     function applyChannelTypePreset(): void {
       const preset = channelTypePresets[state.channelForm.type];
 
@@ -737,6 +991,7 @@ const app = createApp({
 
     return {
       tabs,
+      sourceTypes,
       channelTypes,
       locale,
       t,
@@ -746,13 +1001,23 @@ const app = createApp({
       statusLabel,
       booleanLabel,
       secretLabel,
+      sourceTypeLabel,
+      applySourceTypePreset,
+      selectedRuleSourceType,
+      applyRuleSourcePreset,
+      sourceSetupHelp,
+      sourceUpstreamSetup,
       sourceDedupeWarning,
       nullableText,
       channelTypeLabel,
       channelExists,
+      channelIsEnabled,
+      isRuleChannelSelected,
+      toggleRuleChannel,
       applyChannelTypePreset,
       applyOutlookSmtpPreset,
       setTab,
+      refreshCurrentTab,
       submitAuth,
       logout,
       saveSource,
@@ -762,6 +1027,7 @@ const app = createApp({
       saveChannel,
       editChannel,
       patchChannel,
+      setChannelEnabled,
       testChannel,
       saveRule,
       editRule,
@@ -843,7 +1109,10 @@ const app = createApp({
             <div class="metric metric--cancelled"><span>{{ t.metrics.cancelled }}</span><strong>{{ state.dashboard.outboxByStatus.cancelled }}</strong></div>
           </section>
           <section class="panel">
-            <div class="panel-header"><h2>{{ t.sections.recentErrors }}</h2></div>
+            <div class="panel-header">
+              <h2>{{ t.sections.recentErrors }}</h2>
+              <button type="button" :disabled="state.loading" @click="refreshCurrentTab">{{ t.buttons.refresh }}</button>
+            </div>
             <div class="table-wrap">
               <table>
                 <thead><tr><th>{{ t.labels.id }}</th><th>{{ t.tables.status }}</th><th>{{ t.tables.error }}</th><th>{{ t.tables.updated }}</th></tr></thead>
@@ -867,8 +1136,19 @@ const app = createApp({
               <div class="panel-body form-grid">
                 <label><span>{{ t.labels.id }}</span><input v-model="state.sourceForm.id" /></label>
                 <label><span>{{ t.labels.name }}</span><input v-model="state.sourceForm.name" /></label>
-                <label><span>{{ t.labels.type }}</span><input v-model="state.sourceForm.type" /></label>
+                <label>
+                  <span>{{ t.labels.type }}</span>
+                  <select v-model="state.sourceForm.type" @change="applySourceTypePreset()">
+                    <option v-for="type in sourceTypes" :key="type" :value="type">
+                      {{ sourceTypeLabel(type) }}
+                    </option>
+                  </select>
+                </label>
                 <label><span>{{ t.labels.enabled }}</span><select v-model="state.sourceForm.enabled"><option :value="true">{{ t.common.true }}</option><option :value="false">{{ t.common.false }}</option></select></label>
+                <div class="wide inline-actions">
+                  <span class="muted">{{ t.sourceHelp.preset }}</span>
+                  <button type="button" @click="applySourceTypePreset">{{ t.buttons.applyPreset }}</button>
+                </div>
                 <label class="wide"><span>{{ t.labels.configJson }}</span><textarea v-model="state.sourceForm.configText"></textarea></label>
                 <div v-if="sourceDedupeWarning()" class="notice warning wide">{{ t.messages.genericDedupeWarning }}</div>
                 <label class="wide"><span>{{ t.labels.secretJson }}</span><textarea v-model="state.sourceForm.secretsText"></textarea></label>
@@ -881,7 +1161,10 @@ const app = createApp({
               </div>
             </form>
             <section class="panel">
-              <div class="panel-header"><h2>{{ t.sections.sources }}</h2></div>
+              <div class="panel-header">
+                <h2>{{ t.sections.sources }}</h2>
+                <button type="button" :disabled="state.loading" @click="refreshCurrentTab">{{ t.buttons.refresh }}</button>
+              </div>
               <div class="table-wrap">
                 <table>
                   <thead><tr><th>{{ t.labels.name }}</th><th>{{ t.labels.type }}</th><th>{{ t.tables.webhook }}</th><th>{{ t.tables.secret }}</th><th>{{ t.tables.lastEvent }}</th><th></th></tr></thead>
@@ -898,6 +1181,13 @@ const app = createApp({
                 </table>
               </div>
             </section>
+          </section>
+          <section v-if="state.sourceForm.type === 'komari' || state.sourceForm.type === 'wallos'" class="panel">
+            <div class="panel-header"><h2>{{ t.sections.upstreamTemplate }}</h2></div>
+            <div class="panel-body">
+              <div class="form-note">{{ sourceSetupHelp() }}</div>
+              <pre>{{ sourceUpstreamSetup() }}</pre>
+            </div>
           </section>
         </template>
 
@@ -975,12 +1265,17 @@ const app = createApp({
                   <button class="primary" type="submit">{{ t.buttons.create }}</button>
                   <button type="button" :disabled="!channelExists()" @click="patchChannel()">{{ t.buttons.update }}</button>
                   <button type="button" :disabled="!channelExists()" :title="channelExists() ? '' : t.channelHelp.saveBeforeTest" @click="testChannel()">{{ t.buttons.test }}</button>
-                  <button type="button" :disabled="!channelExists()" @click="patchChannel(false)">{{ t.buttons.disable }}</button>
+                  <button type="button" :disabled="!channelExists()" @click="setChannelEnabled(!channelIsEnabled())">
+                    {{ channelIsEnabled() ? t.buttons.disable : t.buttons.enable }}
+                  </button>
                 </div>
               </div>
             </form>
             <section class="panel">
-              <div class="panel-header"><h2>{{ t.sections.channels }}</h2></div>
+              <div class="panel-header">
+                <h2>{{ t.sections.channels }}</h2>
+                <button type="button" :disabled="state.loading" @click="refreshCurrentTab">{{ t.buttons.refresh }}</button>
+              </div>
               <div class="table-wrap">
                 <table>
                   <thead><tr><th>{{ t.labels.name }}</th><th>{{ t.labels.type }}</th><th>{{ t.labels.enabled }}</th><th>{{ t.tables.secret }}</th><th></th></tr></thead>
@@ -990,7 +1285,7 @@ const app = createApp({
                       <td>{{ channel.type }}</td>
                       <td>{{ booleanLabel(channel.enabled) }}</td>
                       <td>{{ secretLabel(channel.hasSecret) }}</td>
-                      <td class="actions"><button @click="editChannel(channel)">{{ t.buttons.edit }}</button><button @click="testChannel(channel.id)">{{ t.buttons.test }}</button><button @click="editChannel(channel); patchChannel(false)">{{ t.buttons.disable }}</button></td>
+                      <td class="actions"><button @click="editChannel(channel)">{{ t.buttons.edit }}</button><button @click="testChannel(channel.id)">{{ t.buttons.test }}</button><button @click="setChannelEnabled(!channel.enabled, channel.id)">{{ channel.enabled ? t.buttons.disable : t.buttons.enable }}</button></td>
                     </tr>
                   </tbody>
                 </table>
@@ -1006,13 +1301,41 @@ const app = createApp({
               <div class="panel-body form-grid">
                 <label><span>{{ t.labels.id }}</span><input v-model="state.ruleForm.id" /></label>
                 <label><span>{{ t.labels.name }}</span><input v-model="state.ruleForm.name" /></label>
-                <label><span>{{ t.labels.sourceId }}</span><input v-model="state.ruleForm.sourceId" /></label>
+                <label>
+                  <span>{{ t.labels.sourceId }}</span>
+                  <select v-model="state.ruleForm.sourceId">
+                    <option value="">{{ t.common.allSources }}</option>
+                    <option v-for="source in state.sources" :key="source.id" :value="source.id">
+                      {{ source.name }} · {{ source.id }}
+                    </option>
+                  </select>
+                </label>
                 <label><span>{{ t.labels.priority }}</span><input v-model.number="state.ruleForm.priority" type="number" /></label>
                 <label><span>{{ t.labels.enabled }}</span><select v-model="state.ruleForm.enabled"><option :value="true">{{ t.common.true }}</option><option :value="false">{{ t.common.false }}</option></select></label>
                 <label><span>{{ t.labels.stopOnMatch }}</span><select v-model="state.ruleForm.stopOnMatch"><option :value="true">{{ t.common.true }}</option><option :value="false">{{ t.common.false }}</option></select></label>
+                <div v-if="selectedRuleSourceType()" class="wide inline-actions">
+                  <span class="muted">{{ t.sourceHelp.rulePreset }}</span>
+                  <button type="button" @click="applyRuleSourcePreset">{{ t.buttons.applyPreset }}</button>
+                </div>
                 <label class="wide"><span>{{ t.labels.matchJson }}</span><textarea v-model="state.ruleForm.matchText"></textarea></label>
                 <label class="wide"><span>{{ t.labels.templateJson }}</span><textarea v-model="state.ruleForm.templateText"></textarea></label>
-                <label class="wide"><span>{{ t.labels.channelIds }}</span><input v-model="state.ruleForm.channelIdsText" /></label>
+                <div class="field-group wide">
+                  <span class="field-label">{{ t.labels.channelIds }}</span>
+                  <div v-if="state.channels.length > 0" class="choice-list">
+                    <label v-for="channel in state.channels" :key="channel.id" class="choice-row">
+                      <input
+                        type="checkbox"
+                        :checked="isRuleChannelSelected(channel.id)"
+                        @change="toggleRuleChannel(channel.id, $event)"
+                      />
+                      <span class="choice-copy">
+                        <strong>{{ channel.name }}</strong>
+                        <small>{{ channel.id }} · {{ channel.type }}</small>
+                      </span>
+                    </label>
+                  </div>
+                  <div v-else class="form-note">{{ t.messages.createChannelFirst }}</div>
+                </div>
                 <label class="wide"><span>{{ t.labels.samplePayload }}</span><textarea v-model="state.ruleForm.samplePayloadText"></textarea></label>
                 <div class="actions wide">
                   <button class="primary" type="submit">{{ t.buttons.create }}</button>
@@ -1024,7 +1347,10 @@ const app = createApp({
               </div>
             </form>
             <section class="panel">
-              <div class="panel-header"><h2>{{ t.sections.rules }}</h2></div>
+              <div class="panel-header">
+                <h2>{{ t.sections.rules }}</h2>
+                <button type="button" :disabled="state.loading" @click="refreshCurrentTab">{{ t.buttons.refresh }}</button>
+              </div>
               <div class="table-wrap">
                 <table>
                   <thead><tr><th>{{ t.labels.name }}</th><th>{{ t.tables.source }}</th><th>{{ t.labels.enabled }}</th><th>{{ t.labels.priority }}</th><th>{{ t.labels.stopOnMatch }}</th><th>{{ t.tables.channels }}</th><th></th></tr></thead>
@@ -1159,6 +1485,14 @@ function parseJsonObject(raw: string): JsonRecord {
 
 function parseOptionalJsonObject(raw: string): JsonRecord {
   return raw.trim().length === 0 ? {} : parseJsonObject(raw);
+}
+
+function sourceTypeOrDefault(value: string): SourceType {
+  return isSourceType(value) ? value : 'generic';
+}
+
+function isSourceType(value: string): value is SourceType {
+  return (sourceTypes as readonly string[]).includes(value);
 }
 
 function createChannelForm(type: ChannelType = 'telegram'): ChannelFormState {
@@ -1503,6 +1837,20 @@ function initialLocale(): Locale {
   } catch {
     return defaultLocale;
   }
+}
+
+function initialTab(): Tab {
+  try {
+    const stored = sessionStorage.getItem(activeTabStorageKey);
+
+    return isTab(stored) ? stored : 'dashboard';
+  } catch {
+    return 'dashboard';
+  }
+}
+
+function isTab(value: string | null): value is Tab {
+  return value !== null && (tabs as readonly string[]).includes(value);
 }
 
 function isStatusKey(status: string): status is StatusKey {
