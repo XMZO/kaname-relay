@@ -122,7 +122,7 @@ export function matchesRule(match: JsonValue, payload: JsonObject): boolean {
 
 export function renderNotificationMessage(input: RenderMessageInput): NotificationMessage {
   const template = isJsonObject(input.template) ? input.template : {};
-  const fallbackText = JSON.stringify(input.payload);
+  const fallbackText = fallbackNotificationText(input.payload);
   const text = renderTemplateString(stringOrUndefined(template.text) ?? fallbackText, input);
   const message: NotificationMessage = {
     text: text.length > 0 ? text : fallbackText,
@@ -158,6 +158,21 @@ export function renderNotificationMessage(input: RenderMessageInput): Notificati
   }
 
   return message;
+}
+
+function fallbackNotificationText(payload: JsonObject): string {
+  return (
+    firstString(payload, [
+      'message',
+      'text',
+      'body',
+      'content',
+      'description',
+      'title',
+      'name',
+      'subject',
+    ]) ?? JSON.stringify(payload)
+  );
 }
 
 export function readJsonPath(root: JsonValue, path: string): JsonPathResult {

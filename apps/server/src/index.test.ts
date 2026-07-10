@@ -332,7 +332,7 @@ describe('server webhook endpoint', () => {
       triggerProcessing,
     });
 
-    const response = await app.request('/hooks/source-1', {
+    const response = await app.request('/hooks/SOURCE-1', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

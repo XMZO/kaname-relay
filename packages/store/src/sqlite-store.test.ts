@@ -182,6 +182,42 @@ describe('store migration', () => {
       )
       .get() as { sql: string };
     expect(receivedDedupeIndex.sql).toContain('WHERE inbound_dedupe_key IS NOT NULL');
+
+    const sourceIdIndex = db
+      .prepare(
+        `
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'index'
+          AND name = 'idx_webhook_sources_id_nocase'
+        `,
+      )
+      .get() as { sql: string };
+    expect(sourceIdIndex.sql).toContain('id COLLATE NOCASE');
+  });
+});
+
+describe('SqliteStore source lookup', () => {
+  it('matches enabled source IDs case-insensitively and prevents case-only duplicates', async () => {
+    const { db, store } = createHarness();
+
+    await expect(store.getEnabledSource('SOURCE-1')).resolves.toMatchObject({
+      id: 'source-1',
+      enabled: true,
+    });
+    expect(() =>
+      db
+        .prepare(
+          `
+          INSERT INTO webhook_sources (
+            id, name, type, enabled, config_json, created_at, updated_at
+          ) VALUES (
+            'SOURCE-1', 'Case duplicate', 'generic', 1, '{}', 2_000, 2_000
+          )
+          `,
+        )
+        .run(),
+    ).toThrow(/UNIQUE constraint failed/u);
   });
 });
 

@@ -172,7 +172,7 @@ export function createServerApp(options: ServerAppOptions): Hono {
 
   app.post('/hooks/:sourceId', async (context) => {
     const sourceId = context.req.param('sourceId');
-    const rateKey = `${sourceId}:${clientIp(context.req.raw.headers)}`;
+    const rateKey = `${sourceId.toLowerCase()}:${clientIp(context.req.raw.headers)}`;
 
     if (rateLimiter && !rateLimiter.allow(rateKey, now())) {
       return context.json({ error: 'rate limit exceeded' }, 429);

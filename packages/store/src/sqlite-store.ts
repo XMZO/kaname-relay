@@ -566,7 +566,7 @@ export class SqliteStore {
         `
         SELECT *
         FROM webhook_sources
-        WHERE id = ?
+        WHERE id COLLATE NOCASE = ?
           AND enabled = 1
         `,
       )
@@ -723,6 +723,14 @@ export class SqliteStore {
     const row = this.db.prepare('SELECT * FROM webhook_sources WHERE id = ?').get(id) as
       | WebhookSourceRow
       | undefined;
+
+    return Promise.resolve(row ? mapSource(row) : null);
+  }
+
+  public getSourceCaseInsensitive(id: string): Promise<WebhookSourceRecord | null> {
+    const row = this.db
+      .prepare('SELECT * FROM webhook_sources WHERE id COLLATE NOCASE = ?')
+      .get(id) as WebhookSourceRow | undefined;
 
     return Promise.resolve(row ? mapSource(row) : null);
   }

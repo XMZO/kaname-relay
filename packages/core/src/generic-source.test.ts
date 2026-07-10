@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { isSupportedSourceType, matchesRule, parseWebhookSourceEvent } from './generic-source.js';
+import {
+  isSupportedSourceType,
+  matchesRule,
+  parseWebhookSourceEvent,
+  renderNotificationMessage,
+} from './generic-source.js';
 
 describe('generic source match DSL', () => {
   it('matches string prefixes and suffixes without enabling regex', () => {
@@ -97,5 +102,47 @@ describe('built-in webhook source parsers', () => {
     expect(isSupportedSourceType('komari')).toBe(true);
     expect(isSupportedSourceType('wallos')).toBe(true);
     expect(isSupportedSourceType('unknown')).toBe(false);
+  });
+});
+
+describe('notification rendering fallbacks', () => {
+  it('uses a notification title instead of serializing the payload when rendered text is empty', () => {
+    expect(
+      renderNotificationMessage({
+        template: {
+          text: '{{payload.message}}',
+          title: '{{payload.title}}',
+        },
+        payload: {
+          eventType: 'komari.notification',
+          title: 'Test',
+          message: '',
+        },
+        sourceId: 'Komari',
+        eventType: 'komari.notification',
+        ruleId: 'komari-to-telegram',
+        channelId: 'telegram-main',
+        now: 1_000,
+      }),
+    ).toEqual({
+      text: 'Test',
+      title: 'Test',
+    });
+  });
+
+  it('keeps JSON as the final fallback for payloads without notification text fields', () => {
+    expect(
+      renderNotificationMessage({
+        template: {},
+        payload: {
+          count: 3,
+        },
+        sourceId: 'generic',
+        eventType: null,
+        ruleId: 'rule-1',
+        channelId: 'channel-1',
+        now: 1_000,
+      }).text,
+    ).toBe('{"count":3}');
   });
 });

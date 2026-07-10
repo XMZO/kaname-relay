@@ -23,6 +23,7 @@ export const webhookSources = sqliteTable(
   },
   (table) => [
     check('webhook_sources_enabled_bool', sql`${table.enabled} IN (0, 1)`),
+    uniqueIndex('idx_webhook_sources_id_nocase').on(sql`${table.id} COLLATE NOCASE`),
     index('idx_webhook_sources_type_enabled').on(table.type, table.enabled),
   ],
 );

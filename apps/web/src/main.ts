@@ -406,6 +406,10 @@ const app = createApp({
         return `${t.value.messages.unknownSourceId}: ${error.message.slice('unknown source ID:'.length).trim()}`;
       }
 
+      if (error.message.startsWith('source ID already exists:')) {
+        return `${t.value.messages.sourceIdAlreadyExists}: ${error.message.slice('source ID already exists:'.length).trim()}`;
+      }
+
       if (error.message.startsWith('unknown channel IDs:')) {
         return `${t.value.messages.unknownChannelIds}: ${error.message.slice('unknown channel IDs:'.length).trim()}`;
       }

@@ -213,8 +213,15 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
   app.post('/api/admin/sources', async (context) => {
     const body = await readJsonObject(context);
     const type = stringOrDefault(body.type, 'generic');
+    const id = stringOrDefault(body.id, options.idGenerator());
+    const existing = await options.store.getSourceCaseInsensitive(id);
+
+    if (existing) {
+      throw new AdminHttpError(409, `source ID already exists: ${existing.id}`);
+    }
+
     const source = await options.store.saveSource({
-      id: stringOrDefault(body.id, options.idGenerator()),
+      id,
       name: requiredString(body.name, 'name'),
       type,
       enabled: booleanOrDefault(body.enabled, true),

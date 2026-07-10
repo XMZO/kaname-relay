@@ -338,6 +338,20 @@ describe('admin API', () => {
       },
     });
 
+    const caseCollision = await app.request('/api/admin/sources', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'SOURCE-KOMARI-DEFAULT',
+        name: 'Komari duplicate',
+        type: 'komari',
+      }),
+    });
+    expect(caseCollision.status).toBe(409);
+    await expect(caseCollision.json()).resolves.toEqual({
+      error: 'source ID already exists: source-komari-default',
+    });
+
     const wallos = await app.request('/api/admin/sources', {
       method: 'POST',
       headers: adminHeaders(auth, true),

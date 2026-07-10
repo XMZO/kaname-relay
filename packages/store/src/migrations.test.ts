@@ -31,18 +31,18 @@ describe('applySqliteMigrations', () => {
   it('records migrations and skips them on the next startup', () => {
     const db = createDb();
 
-    expect(applySqliteMigrations(db)).toEqual(['0001_initial.sql']);
+    expect(applySqliteMigrations(db)).toEqual(['0001_initial.sql', '0002_source_id_nocase.sql']);
     expect(applySqliteMigrations(db)).toEqual([]);
-    expect(migrationIds(db)).toEqual(['0001_initial.sql']);
+    expect(migrationIds(db)).toEqual(['0001_initial.sql', '0002_source_id_nocase.sql']);
   });
 
   it('baselines a database initialized by the pre-journal migrator', () => {
     const db = createDb();
     db.exec(readFileSync(join(defaultMigrationsDir, '0001_initial.sql'), 'utf8'));
 
-    expect(applySqliteMigrations(db)).toEqual(['0001_initial.sql']);
+    expect(applySqliteMigrations(db)).toEqual(['0001_initial.sql', '0002_source_id_nocase.sql']);
     expect(applySqliteMigrations(db)).toEqual([]);
-    expect(migrationIds(db)).toEqual(['0001_initial.sql']);
+    expect(migrationIds(db)).toEqual(['0001_initial.sql', '0002_source_id_nocase.sql']);
   });
 
   it('does not baseline a partially created schema', () => {
