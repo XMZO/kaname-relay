@@ -15,7 +15,6 @@ import type {
   SentLogEntry as CoreSentLogEntry,
 } from '@kaname-relay/core';
 
-import type { D1Store } from './d1-store.js';
 import type { SqliteStore } from './sqlite-store.js';
 import type {
   CancelOutboxInput,
@@ -43,7 +42,6 @@ export interface ProcessPendingStoreAdapterOptions {
 }
 
 export type SqliteProcessPendingStoreOptions = ProcessPendingStoreAdapterOptions;
-export type D1ProcessPendingStoreOptions = ProcessPendingStoreAdapterOptions;
 
 interface ProcessPendingBackingStore {
   recoverExpiredLeases(input: RecoverExpiredLeasesInput): Promise<RecoverExpiredLeasesResult>;
@@ -239,12 +237,6 @@ export class StoreProcessPendingAdapter implements ProcessPendingStore {
 
 export class SqliteProcessPendingStore extends StoreProcessPendingAdapter {
   public constructor(store: SqliteStore, options: SqliteProcessPendingStoreOptions = {}) {
-    super(store, options);
-  }
-}
-
-export class D1ProcessPendingStore extends StoreProcessPendingAdapter {
-  public constructor(store: D1Store, options: D1ProcessPendingStoreOptions = {}) {
     super(store, options);
   }
 }

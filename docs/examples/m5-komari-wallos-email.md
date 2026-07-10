@@ -126,7 +126,7 @@ Create this from the WebUI: Channels -> Type `Resend email`. The JSON below mirr
 
 ## SMTP Channel
 
-SMTP is Node/VPS-only and is not included in the Cloudflare Worker bundle. Create this from the WebUI: Channels -> Type `SMTP email`. The host, port, SSL/STARTTLS, LOGIN auth, username, and password/app password are all WebUI fields stored in the channel config/secret bundle; no SMTP `.env` variables are required.
+Create SMTP channels from the WebUI: Channels -> Type `SMTP email`. The host, port, SSL/STARTTLS, LOGIN auth, username, and password/app password are all WebUI fields stored in the channel config/secret bundle; no SMTP `.env` variables are required.
 
 ```json
 {

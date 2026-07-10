@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./d1": "./src/d1-store.ts",
     "./process": "./src/process-store.ts",
     "./types": "./src/types.ts"
   },

@@ -12,7 +12,6 @@ RUN apt-get update \
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsconfig.base.json ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
-COPY apps/worker/package.json apps/worker/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/notifiers/package.json packages/notifiers/package.json
 COPY packages/store/package.json packages/store/package.json
@@ -42,7 +41,6 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
-COPY apps/worker/package.json apps/worker/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/notifiers/package.json packages/notifiers/package.json
 COPY packages/store/package.json packages/store/package.json

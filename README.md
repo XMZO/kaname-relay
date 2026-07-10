@@ -1,6 +1,6 @@
 # Kaname Relay
 
-Lightweight webhook relay with WebUI management, outbox-based reliable delivery, SQLite/D1 storage, and Node.js plus Cloudflare Worker runtimes.
+Lightweight webhook relay with WebUI management, outbox-based reliable delivery, SQLite storage, and a Node.js runtime for low-resource VPS and Raspberry Pi deployments.
 
 ## Features
 
@@ -30,18 +30,6 @@ Optional runtime overrides:
 - `KANAME_WEB_DIR`: static WebUI directory. Set to `disabled` to disable static serving.
 - `PORT` / `HOST`: Node server bind address.
 
-## Cloudflare Worker / D1
-
-```bash
-pnpm --filter @kaname-relay/web build
-pnpm exec wrangler d1 migrations apply kaname-relay --config apps/worker/wrangler.toml
-pnpm exec wrangler secret put APP_SECRET --config apps/worker/wrangler.toml
-pnpm --filter @kaname-relay/worker build
-pnpm exec wrangler deploy --config apps/worker/wrangler.toml
-```
-
-Worker webhook delivery is bounded: `ctx.waitUntil()` handles a small immediate batch, and Cron handles backlog/retry at one-minute granularity.
-
 ## Security Notes
 
 - Configure `webhookSecret` in source secrets to require `x-kaname-signature: sha256=<hmac>` over the raw request body.
@@ -60,7 +48,8 @@ sqlite3 data/kaname-relay.sqlite ".backup 'kaname-relay-backup.sqlite'"
 ```
 
 - Back up `data/.kaname-app-secret` together with SQLite. Restore both files before starting the server.
-- D1 backup/export should be done with Wrangler D1 export for the target Cloudflare account.
+
+Cloudflare Worker/D1 support is deferred. Its design remains documented in `plan.md`, but the current repository does not build or ship a Worker runtime.
 
 ## Examples
 

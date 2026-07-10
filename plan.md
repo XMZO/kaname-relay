@@ -1,8 +1,19 @@
 # kaname-relay 实现计划
 
-最后更新：2026-06-17
+最后更新：2026-07-10
 
 本文档是后续实现的唯一依据。实现过程中如果发现本文档与实际约束冲突，先更新本文档并经确认，再改代码。
+
+## 0. 当前实施范围
+
+当前发布只实现并维护 Debian VPS / 树莓派上的 Node.js + SQLite + Docker Compose 版本。
+
+Cloudflare Worker + D1 方案整体延期，保留本文中的架构、接口、可靠投递和 M4 设计作为未来实现依据，但当前仓库：
+
+1. 不包含 `apps/worker`、`D1Store` 或 Wrangler 配置。
+2. 不安装 Wrangler / workerd，不在 CI 或 `pnpm run build` 中构建 Worker。
+3. 不以 Worker 功能对等作为当前版本验收条件。
+4. 恢复 Worker 工作前，必须重新审查届时的 Cloudflare 限额、D1 语义和依赖版本，再按 M4 单独实施。
 
 ## 1. 项目目标与非目标
 
@@ -16,9 +27,7 @@ kaname-relay 是一个轻量 webhook relay：
 4. 将一次入站事件拆成一个或多个 outbox 投递任务。
 5. 通过 Telegram、Email、通用 webhook 等 notifier 做异步投递。
 6. 提供 WebUI 管理 source、规则、渠道、测试发送、outbox、日志和重放。
-7. 同一套核心逻辑同时支持：
-   - 低配 Debian VPS / 树莓派：Docker Compose 或裸 Node.js + SQLite。
-   - Cloudflare Workers：Hono Worker + D1 + Cron Trigger。
+7. 当前支持低配 Debian VPS / 树莓派：Docker Compose 或裸 Node.js + SQLite。Cloudflare Workers 作为延期目标保留设计，不属于当前交付范围。
 
 核心运行模型：
 
@@ -55,11 +64,11 @@ HTTP webhook
 | HTTP 框架 | Hono | 基于 Web Standards 的 Request/Response 模型，能同时适配 Node.js 和 Cloudflare Workers。 |
 | WebUI | Vite + Vue 3 | 构建后是静态文件，运行时无前端服务进程；Vue 适合管理后台表单和状态 UI。 |
 | VPS 数据库 | SQLite | 单文件、无独立数据库进程，适合 1C512M VPS 和树莓派。 |
-| Worker 数据库 | Cloudflare D1 | D1 是 Cloudflare 托管的 SQLite 语义数据库，适合 Worker 版持久化。 |
+| Worker 数据库（延期） | Cloudflare D1 | 未来 Worker 版候选持久化方案；当前不安装、不构建。 |
 | ORM / schema | Drizzle ORM | 类型安全、轻量，支持 SQLite 和 D1，schema 可尽量共享。 |
 | 包管理 | pnpm workspace | monorepo 依赖去重好，适合 packages + apps 的拆分。 |
 | Node SQLite driver | better-sqlite3 | 同步、轻量、稳定，适合低并发 webhook relay；Store 层对外仍暴露 Promise 接口。 |
-| Worker 部署 | Wrangler | Cloudflare 官方 Workers/D1/Cron/migrations 部署工具。 |
+| Worker 部署（延期） | Wrangler | 未来实现时再引入；当前依赖和构建链不包含 Wrangler。 |
 | 通用 Email | Resend HTTP API | 两个运行时都能通过 fetch 调用；避免 Worker 上 SMTP/TCP 兼容问题。 |
 | VPS-only Email | SMTP / Nodemailer | 作为 VPS 增强 transport，不作为跨运行时必备能力。 |
 
@@ -76,7 +85,7 @@ HTTP webhook
 │  │  │  └─ static/
 │  │  ├─ Dockerfile
 │  │  └─ package.json
-│  ├─ worker/
+│  ├─ worker/                     # 延期目标，当前仓库不存在
 │  │  ├─ src/
 │  │  │  ├─ index.ts
 │  │  │  ├─ bindings.ts
@@ -138,7 +147,7 @@ HTTP webhook
 
 - 定义 Drizzle schema 和 migration 输出。
 - 实现 `SqliteStore`：VPS / 树莓派使用 better-sqlite3。
-- 实现 `D1Store`：Worker 使用 Cloudflare D1 binding。
+- 未来实现 `D1Store`：Worker 使用 Cloudflare D1 binding；当前仓库不包含该实现。
 - 负责 SQL 差异隐藏在 Store 实现内，不能泄漏到 core。
 
 `packages/notifiers`
@@ -156,7 +165,7 @@ HTTP webhook
 - 用 `setInterval` 驱动 `processPending()`。
 - 提供 graceful shutdown。
 
-`apps/worker`
+`apps/worker`（延期目标，当前仓库不存在）
 
 - Cloudflare Worker 入口。
 - 创建 Hono app、D1 store、notifier registry。
@@ -1709,7 +1718,9 @@ GET    /api/admin/dashboard
 3. 容器内不需要 dev server。
 4. 空闲 RAM 符合轻量目标。
 
-### M4：Worker + D1 入口
+### M4：Worker + D1 入口（Deferred，当前不实施）
+
+状态：延期。以下内容保留为未来任务，不属于当前代码、CI、镜像或发布验收范围。
 
 内容：
 
@@ -1741,7 +1752,7 @@ GET    /api/admin/dashboard
 
 1. 使用真实或样例 Komari payload 能解析、去重、投递。
 2. 使用真实或样例 Wallos payload 能解析、去重、投递。
-3. Resend 在 Node 和 Worker 两边都能发送。
+3. Resend 在 Node server 能发送；Worker 侧对等能力延期到 M4 恢复时验证。
 4. SMTP 只在 Node server 启用。
 
 ### M6：硬化与文档
@@ -1761,7 +1772,7 @@ GET    /api/admin/dashboard
 
 1. 长时间运行日志和 SQLite 不无限膨胀。
 2. 常见错误在 WebUI 中可读。
-3. Docker 和 Worker 部署步骤可复现。
+3. Docker 部署步骤可复现；Worker 部署文档延期到 M4。
 4. 基础安全项完成。
 
 ## 14. 边界情况清单

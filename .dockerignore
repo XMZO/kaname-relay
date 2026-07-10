@@ -3,9 +3,7 @@ dist
 coverage
 .git
 .turbo
-.wrangler
 data
 *.log
 .env
 .env.*
-!.env.example

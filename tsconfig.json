@@ -5,7 +5,6 @@
     { "path": "./packages/store" },
     { "path": "./packages/notifiers" },
     { "path": "./apps/server" },
-    { "path": "./apps/worker" },
     { "path": "./apps/web" }
   ]
 }
