@@ -35,6 +35,8 @@ export interface AdminRoutesOptions {
 
 const PASSWORD_SETTING = 'admin.passwordHash';
 const SESSION_SECRET_SETTING = 'admin.sessionSecret';
+export const RETRY_SETTING = 'delivery.retryDefaults';
+export const RETENTION_SETTING = 'retention.policy';
 const SESSION_COOKIE = 'kaname_session';
 const CSRF_COOKIE = 'kaname_csrf';
 const CSRF_HEADER = 'x-kaname-csrf';
@@ -42,6 +44,20 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const DEFAULT_GENERIC_SOURCE_CONFIG = {
   inboundDedupePath: '$.id',
   eventTypePath: '$.eventType',
+};
+const DEFAULT_RETENTION_POLICY = {
+  sentRetentionDays: 30,
+  receivedRetentionDays: 30,
+  cleanupLimit: 100,
+};
+const DEFAULT_RETRY_DEFAULTS = {
+  maxAttempts: 10,
+  initialDelayMs: 30_000,
+  multiplier: 2,
+  maxDelayMs: 1_800_000,
+  jitterRatio: 0.2,
+  leaseMs: 90_000,
+  sendTimeoutMs: 15_000,
 };
 
 export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
@@ -125,6 +141,66 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
   app.get('/api/admin/dashboard', async (context) =>
     context.json(await options.store.getDashboardStats(options.now())),
   );
+
+  app.get('/api/admin/settings', async (context) => {
+    const retention = await getJsonSetting(
+      options.store,
+      RETENTION_SETTING,
+      DEFAULT_RETENTION_POLICY,
+    );
+    const retry = await getJsonSetting(options.store, RETRY_SETTING, DEFAULT_RETRY_DEFAULTS);
+
+    return context.json({
+      retention,
+      retry,
+    });
+  });
+
+  app.patch('/api/admin/settings', async (context) => {
+    const body = await readJsonObject(context);
+    const response: JsonObject = {};
+
+    if (body.retention !== undefined) {
+      const retention = retentionPolicy(jsonObject(body.retention, 'retention'));
+      await options.store.setSetting(RETENTION_SETTING, JSON.stringify(retention), options.now());
+      response.retention = retention;
+    }
+
+    if (body.retry !== undefined) {
+      const retry = retryDefaults(jsonObject(body.retry, 'retry'));
+      await options.store.setSetting(RETRY_SETTING, JSON.stringify(retry), options.now());
+      response.retry = retry;
+    }
+
+    return context.json(response);
+  });
+
+  app.post('/api/admin/password', async (context) => {
+    const setting = await options.store.getSetting(PASSWORD_SETTING);
+
+    if (!setting) {
+      throw new AdminHttpError(409, 'admin password is not initialized');
+    }
+
+    const body = await readJsonObject(context);
+    const currentPassword = requiredString(body.currentPassword, 'currentPassword');
+    const newPassword = requiredString(body.newPassword, 'newPassword');
+    const passwordSetting = parseJsonObject(setting.valueJson, PASSWORD_SETTING);
+    const hash = requiredString(passwordSetting.hash, 'password hash');
+
+    if (!verifyPassword(currentPassword, hash)) {
+      throw new AdminHttpError(401, 'invalid password');
+    }
+
+    assertPassword(newPassword);
+    await options.store.setSetting(
+      PASSWORD_SETTING,
+      JSON.stringify({ hash: hashPassword(newPassword) }),
+      options.now(),
+    );
+
+    return context.json({ ok: true });
+  });
 
   app.get('/api/admin/sources', async (context) => {
     const sources = await options.store.listSources();
@@ -422,6 +498,8 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     const filters: ListOutboxFilters = {};
     const status = optionalOutboxStatus(context.req.query('status'));
     const limit = optionalPositiveInteger(context.req.query('limit'));
+    const createdFrom = optionalUnixMs(context.req.query('createdFrom'), 'createdFrom');
+    const createdTo = optionalUnixMs(context.req.query('createdTo'), 'createdTo');
     const sourceId = context.req.query('sourceId');
     const channelId = context.req.query('channelId');
 
@@ -435,6 +513,14 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
 
     if (channelId !== undefined) {
       filters.channelId = channelId;
+    }
+
+    if (createdFrom !== undefined) {
+      filters.createdFrom = createdFrom;
+    }
+
+    if (createdTo !== undefined) {
+      filters.createdTo = createdTo;
     }
 
     if (limit !== undefined) {
@@ -571,6 +657,124 @@ async function getSessionSecret(store: SqliteStore, now: number): Promise<string
   return secret;
 }
 
+async function getJsonSetting(
+  store: SqliteStore,
+  key: string,
+  fallback: JsonObject,
+): Promise<JsonObject> {
+  const setting = await store.getSetting(key);
+
+  return setting ? parseJsonObject(setting.valueJson, key) : fallback;
+}
+
+function retentionPolicy(input: JsonObject): JsonObject {
+  return {
+    sentRetentionDays: positiveIntegerOrDefault(
+      input.sentRetentionDays,
+      DEFAULT_RETENTION_POLICY.sentRetentionDays,
+      'retention.sentRetentionDays',
+    ),
+    receivedRetentionDays: positiveIntegerOrDefault(
+      input.receivedRetentionDays,
+      DEFAULT_RETENTION_POLICY.receivedRetentionDays,
+      'retention.receivedRetentionDays',
+    ),
+    cleanupLimit: positiveIntegerOrDefault(
+      input.cleanupLimit,
+      DEFAULT_RETENTION_POLICY.cleanupLimit,
+      'retention.cleanupLimit',
+    ),
+  };
+}
+
+function retryDefaults(input: JsonObject): JsonObject {
+  return {
+    maxAttempts: positiveIntegerOrDefault(
+      input.maxAttempts,
+      DEFAULT_RETRY_DEFAULTS.maxAttempts,
+      'retry.maxAttempts',
+    ),
+    initialDelayMs: positiveIntegerOrDefault(
+      input.initialDelayMs,
+      DEFAULT_RETRY_DEFAULTS.initialDelayMs,
+      'retry.initialDelayMs',
+    ),
+    multiplier: positiveNumberOrDefault(
+      input.multiplier,
+      DEFAULT_RETRY_DEFAULTS.multiplier,
+      'retry.multiplier',
+    ),
+    maxDelayMs: positiveIntegerOrDefault(
+      input.maxDelayMs,
+      DEFAULT_RETRY_DEFAULTS.maxDelayMs,
+      'retry.maxDelayMs',
+    ),
+    jitterRatio: nonNegativeNumberOrDefault(
+      input.jitterRatio,
+      DEFAULT_RETRY_DEFAULTS.jitterRatio,
+      'retry.jitterRatio',
+    ),
+    leaseMs: positiveIntegerOrDefault(
+      input.leaseMs,
+      DEFAULT_RETRY_DEFAULTS.leaseMs,
+      'retry.leaseMs',
+    ),
+    sendTimeoutMs: positiveIntegerOrDefault(
+      input.sendTimeoutMs,
+      DEFAULT_RETRY_DEFAULTS.sendTimeoutMs,
+      'retry.sendTimeoutMs',
+    ),
+  };
+}
+
+function positiveIntegerOrDefault(
+  value: JsonValue | undefined,
+  fallback: number,
+  label: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new AdminHttpError(400, `${label} must be a positive integer`);
+  }
+
+  return value;
+}
+
+function positiveNumberOrDefault(
+  value: JsonValue | undefined,
+  fallback: number,
+  label: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new AdminHttpError(400, `${label} must be a positive number`);
+  }
+
+  return value;
+}
+
+function nonNegativeNumberOrDefault(
+  value: JsonValue | undefined,
+  fallback: number,
+  label: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new AdminHttpError(400, `${label} must be a non-negative number`);
+  }
+
+  return value;
+}
+
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('base64url');
   const hash = scryptSync(password, salt, 64).toString('base64url');
@@ -666,6 +870,10 @@ function sourceResponse(source: {
   secretJsonEnc: string | null;
   createdAt: number;
   updatedAt: number;
+  lastEventAt?: number | null;
+  lastEventType?: string | null;
+  lastEventDedupeKey?: string | null;
+  lastEventSeenCount?: number | null;
 }): JsonObject {
   return {
     id: source.id,
@@ -677,6 +885,10 @@ function sourceResponse(source: {
     webhookPath: `/hooks/${source.id}`,
     createdAt: source.createdAt,
     updatedAt: source.updatedAt,
+    lastEventAt: source.lastEventAt ?? null,
+    lastEventType: source.lastEventType ?? null,
+    lastEventDedupeKey: source.lastEventDedupeKey ?? null,
+    lastEventSeenCount: source.lastEventSeenCount ?? null,
   };
 }
 
@@ -950,6 +1162,20 @@ function optionalPositiveInteger(value: string | undefined): number | undefined 
 
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new AdminHttpError(400, 'expected a positive integer');
+  }
+
+  return parsed;
+}
+
+function optionalUnixMs(value: string | undefined, label: string): number | undefined {
+  if (value === undefined || value.length === 0) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new AdminHttpError(400, `${label} must be a unix timestamp in milliseconds`);
   }
 
   return parsed;

@@ -11,6 +11,10 @@ export interface WebhookSourceRecord {
   secretJsonEnc: string | null;
   createdAt: UnixMs;
   updatedAt: UnixMs;
+  lastEventAt?: UnixMs | null;
+  lastEventType?: string | null;
+  lastEventDedupeKey?: string | null;
+  lastEventSeenCount?: number | null;
 }
 
 export interface ChannelRecord {
@@ -129,6 +133,8 @@ export interface ListOutboxFilters {
   status?: OutboxStatus;
   sourceId?: string;
   channelId?: string;
+  createdFrom?: UnixMs;
+  createdTo?: UnixMs;
   limit?: number;
 }
 

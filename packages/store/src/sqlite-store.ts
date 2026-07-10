@@ -63,6 +63,10 @@ interface WebhookSourceRow {
   secret_json_enc: string | null;
   created_at: number;
   updated_at: number;
+  last_event_at?: number | null;
+  last_event_type?: string | null;
+  last_event_dedupe_key?: string | null;
+  last_event_seen_count?: number | null;
 }
 
 interface ChannelRow {
@@ -209,6 +213,10 @@ function mapSource(row: WebhookSourceRow): WebhookSourceRecord {
     secretJsonEnc: row.secret_json_enc,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastEventAt: row.last_event_at ?? null,
+    lastEventType: row.last_event_type ?? null,
+    lastEventDedupeKey: row.last_event_dedupe_key ?? null,
+    lastEventSeenCount: row.last_event_seen_count ?? null,
   };
 }
 
@@ -672,7 +680,36 @@ export class SqliteStore {
     const rows = this.db
       .prepare(
         `
-        SELECT *
+        SELECT
+          webhook_sources.*,
+          (
+            SELECT last_seen_at
+            FROM received_events
+            WHERE received_events.source_id = webhook_sources.id
+            ORDER BY last_seen_at DESC
+            LIMIT 1
+          ) AS last_event_at,
+          (
+            SELECT event_type
+            FROM received_events
+            WHERE received_events.source_id = webhook_sources.id
+            ORDER BY last_seen_at DESC
+            LIMIT 1
+          ) AS last_event_type,
+          (
+            SELECT inbound_dedupe_key
+            FROM received_events
+            WHERE received_events.source_id = webhook_sources.id
+            ORDER BY last_seen_at DESC
+            LIMIT 1
+          ) AS last_event_dedupe_key,
+          (
+            SELECT seen_count
+            FROM received_events
+            WHERE received_events.source_id = webhook_sources.id
+            ORDER BY last_seen_at DESC
+            LIMIT 1
+          ) AS last_event_seen_count
         FROM webhook_sources
         ORDER BY created_at DESC
         `,
@@ -915,6 +952,16 @@ export class SqliteStore {
     if (filters.channelId) {
       conditions.push('channel_id = :channel_id');
       params.channel_id = filters.channelId;
+    }
+
+    if (filters.createdFrom !== undefined) {
+      conditions.push('created_at >= :created_from');
+      params.created_from = filters.createdFrom;
+    }
+
+    if (filters.createdTo !== undefined) {
+      conditions.push('created_at <= :created_to');
+      params.created_to = filters.createdTo;
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

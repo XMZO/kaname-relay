@@ -6,24 +6,26 @@ Lightweight webhook relay with WebUI management, outbox-based reliable delivery,
 
 - Receive webhooks, match rules, render messages, and deliver through notifiers.
 - Built-in source parsers: `generic`, `komari`, `wallos`.
-- Notifiers: Telegram, Resend email, and Node-only SMTP.
+- Notifiers: Telegram, generic webhook, Resend email, and Node-only SMTP.
 - At-least-once delivery with lease recovery, exponential backoff, sent-log dedupe, and dead-letter states.
 - WebUI for sources, channels, rules, outbox, sent log, test sends, replay, and cancel.
-- Secret encryption with `APP_SECRET` / `KANAME_APP_SECRET`; plaintext secrets remain readable for migration.
+- Notification channel credentials are configured in the WebUI channel forms, not via provider-specific `.env` variables.
+- Secret encryption with an automatically persisted runtime key; `APP_SECRET` remains an optional override for existing deployments.
 
 ## Local VPS / Docker
 
 ```bash
 pnpm install
 pnpm run build
-APP_SECRET='replace-with-32-random-chars' pnpm --filter @kaname-relay/server start
+pnpm --filter @kaname-relay/server start
 ```
 
-Docker Compose uses the same runtime. Keep `APP_SECRET` stable; changing it makes encrypted secrets unreadable unless they are rotated.
+Docker Compose requires no `.env` file. The image, port, timezone, database path, and static asset paths are defined in `docker-compose.yml`. On first start, the server creates `.kaname-app-secret` beside the SQLite database and reuses it on later starts.
 
-Important environment variables:
+Optional runtime overrides:
 
-- `APP_SECRET` or `KANAME_APP_SECRET`: enables AES-GCM encryption for source/channel secrets.
+- `APP_SECRET` or `KANAME_APP_SECRET`: overrides the generated AES-GCM key. When no key file exists, the override is persisted for migration away from `.env`.
+- `KANAME_APP_SECRET_FILE`: overrides the generated key file path.
 - `KANAME_SQLITE_PATH` or `DATABASE_URL`: SQLite file path. Defaults to `data/kaname-relay.sqlite`.
 - `KANAME_WEB_DIR`: static WebUI directory. Set to `disabled` to disable static serving.
 - `PORT` / `HOST`: Node server bind address.
@@ -57,7 +59,7 @@ Worker webhook delivery is bounded: `ctx.waitUntil()` handles a small immediate 
 sqlite3 data/kaname-relay.sqlite ".backup 'kaname-relay-backup.sqlite'"
 ```
 
-- Restore by stopping the server, replacing the SQLite file, then starting again with the same `APP_SECRET`.
+- Back up `data/.kaname-app-secret` together with SQLite. Restore both files before starting the server.
 - D1 backup/export should be done with Wrangler D1 export for the target Cloudflare account.
 
 ## Examples

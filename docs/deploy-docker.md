@@ -1,10 +1,10 @@
 # Docker Deployment
 
-Build and run:
+Pull and run; no `.env` file is required:
 
 ```sh
-cp .env.example .env
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Open `http://SERVER_IP:3000`, initialize the admin password, then create sources, channels, and rules from the WebUI.
@@ -14,6 +14,16 @@ Persistent data lives in `./data` on the host and is mounted at `/data` in the c
 ```txt
 file:/data/kaname-relay.sqlite
 ```
+
+The encryption key is generated automatically on first startup and persisted at:
+
+```txt
+./data/.kaname-app-secret
+```
+
+Back up that file together with the SQLite database. Existing deployments that still provide `APP_SECRET` will persist it to the key file on the first upgraded startup and can then remove `.env`.
+
+The public port (`3000`) and timezone (`Asia/Shanghai`) are defined directly in `docker-compose.yml`; edit that file when the deployment needs different values.
 
 Useful commands:
 

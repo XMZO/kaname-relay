@@ -17,7 +17,11 @@ import {
   type ProcessPendingResult,
   type SecretCodec,
 } from '@kaname-relay/core';
-import { createResendNotifier, createTelegramNotifier } from '@kaname-relay/notifiers';
+import {
+  createResendNotifier,
+  createTelegramNotifier,
+  createWebhookNotifier,
+} from '@kaname-relay/notifiers';
 import { D1Store, type D1DatabaseLike } from '@kaname-relay/store/d1';
 import { D1ProcessPendingStore } from '@kaname-relay/store/process';
 import type { NewOutboxItem, RuleRecord } from '@kaname-relay/store/types';
@@ -261,6 +265,7 @@ export function runWorkerProcess(
     notifiers: options.notifiers ?? {
       resend: createResendNotifier(),
       telegram: createTelegramNotifier(),
+      webhook: createWebhookNotifier(),
     },
     now,
     idGenerator: options.idGenerator ?? randomId,

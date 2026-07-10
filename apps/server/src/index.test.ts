@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHmac } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { processPending, type Notifier } from '@kaname-relay/core';
 import { applySqliteMigrations, SqliteProcessPendingStore, SqliteStore } from '@kaname-relay/store';
-import { createServerApp } from './index.js';
+import { createNodeRuntime, createServerApp } from './index.js';
 
 interface Harness {
   db: Database.Database;
@@ -232,6 +232,76 @@ function seedBuiltinSource(
     rule_id: input.ruleId,
     now,
   });
+}
+
+describe('node runtime app secret', () => {
+  it('generates a persistent secret beside the SQLite database without .env', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kaname-relay-runtime-secret-'));
+    const databasePath = join(dir, 'data', 'kaname-relay.sqlite');
+    const secretPath = join(dir, 'data', '.kaname-app-secret');
+    const previous = captureSecretEnvironment();
+    let runtime: ReturnType<typeof createNodeRuntime> | undefined;
+
+    delete process.env.APP_SECRET;
+    delete process.env.KANAME_APP_SECRET;
+    delete process.env.KANAME_APP_SECRET_FILE;
+
+    try {
+      runtime = createNodeRuntime({ databasePath, webDir: null, retention: false });
+      expect(existsSync(secretPath)).toBe(true);
+      const firstSecret = readFileSync(secretPath, 'utf8').trim();
+      expect(firstSecret).toMatch(/^[a-f0-9]{64}$/u);
+      runtime.stop();
+      runtime = undefined;
+
+      runtime = createNodeRuntime({ databasePath, webDir: null, retention: false });
+      expect(readFileSync(secretPath, 'utf8').trim()).toBe(firstSecret);
+    } finally {
+      runtime?.stop();
+      restoreSecretEnvironment(previous);
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('persists an existing APP_SECRET for migration away from .env', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kaname-relay-runtime-env-secret-'));
+    const databasePath = join(dir, 'kaname-relay.sqlite');
+    const secretPath = join(dir, '.kaname-app-secret');
+    const previous = captureSecretEnvironment();
+    const configuredSecret = 'existing-app-secret-with-more-than-16-chars';
+    let runtime: ReturnType<typeof createNodeRuntime> | undefined;
+
+    process.env.APP_SECRET = configuredSecret;
+    delete process.env.KANAME_APP_SECRET;
+    delete process.env.KANAME_APP_SECRET_FILE;
+
+    try {
+      runtime = createNodeRuntime({ databasePath, webDir: null, retention: false });
+      expect(readFileSync(secretPath, 'utf8').trim()).toBe(configuredSecret);
+    } finally {
+      runtime?.stop();
+      restoreSecretEnvironment(previous);
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+});
+
+function captureSecretEnvironment(): Record<string, string | undefined> {
+  return {
+    APP_SECRET: process.env.APP_SECRET,
+    KANAME_APP_SECRET: process.env.KANAME_APP_SECRET,
+    KANAME_APP_SECRET_FILE: process.env.KANAME_APP_SECRET_FILE,
+  };
+}
+
+function restoreSecretEnvironment(previous: Record<string, string | undefined>): void {
+  for (const [name, value] of Object.entries(previous)) {
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
 }
 
 describe('server webhook endpoint', () => {

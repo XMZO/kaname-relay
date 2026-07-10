@@ -197,6 +197,10 @@ textarea {
   line-height: 1.5;
 }
 
+textarea.textarea-compact {
+  min-height: 72px;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -265,6 +269,16 @@ pre {
   color: var(--text-muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.language-toggle {
+  min-width: 64px;
 }
 
 /* Tab navigation */
@@ -364,6 +378,67 @@ pre {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.form-note,
+.secret-hint {
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.secret-hint {
+  border-color: #c7d7fe;
+  background: #eff4ff;
+  color: #1849a9;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding-top: 20px;
+}
+
+.check-row input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+
+.advanced-json {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.advanced-json summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.advanced-json[open] {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.advanced-json[open] summary {
+  margin-bottom: var(--space-3);
 }
 
 /* Compact buttons inside tables */
@@ -587,6 +662,12 @@ tbody tr:last-child td {
   background: var(--bg);
 }
 
+.auth-language-toggle {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+}
+
 .auth-panel {
   width: min(400px, 100%);
   padding: var(--space-6);
@@ -672,6 +753,10 @@ tbody tr:last-child td {
     flex-direction: column;
     align-items: stretch;
     gap: var(--space-3);
+  }
+
+  .topbar-actions {
+    justify-content: space-between;
   }
 
   .metrics {

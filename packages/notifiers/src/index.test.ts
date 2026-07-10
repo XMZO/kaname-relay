@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createResendNotifier,
   createTelegramNotifier,
+  createWebhookNotifier,
   ResendNotifierError,
   TelegramNotifierError,
+  WebhookNotifierError,
 } from './index.js';
 
 describe('createTelegramNotifier', () => {
@@ -211,5 +213,118 @@ describe('createResendNotifier', () => {
       statusCode: 429,
       providerCode: 'rate_limit_exceeded',
     } satisfies Partial<ResendNotifierError>);
+  });
+});
+
+describe('createWebhookNotifier', () => {
+  it('sends generic webhook requests with configured headers and idempotency keys', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'webhook-message-1',
+          ok: true,
+        }),
+        { status: 202 },
+      ),
+    );
+    const notifier = createWebhookNotifier(fetchMock);
+
+    const result = await notifier.send(
+      {
+        title: 'Alert',
+        text: 'hello',
+        tags: ['ops'],
+        metadata: {
+          source: 'test',
+        },
+      },
+      {
+        channel: {
+          id: 'channel-webhook',
+          name: 'Webhook',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'https://example.com/hooks/notify',
+            headers: {
+              'x-route': 'ops',
+            },
+            idempotencyHeader: 'Idempotency-Key',
+          },
+          secrets: {
+            headers: {
+              authorization: 'Bearer token',
+            },
+          },
+        },
+        idempotencyKey: 'outbound-webhook-1',
+        now: () => 1_000,
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.com/hooks/notify',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'content-type': 'application/json',
+          'x-route': 'ops',
+          authorization: 'Bearer token',
+          'idempotency-key': 'outbound-webhook-1',
+        }),
+        body: JSON.stringify({
+          text: 'hello',
+          title: 'Alert',
+          tags: ['ops'],
+          metadata: {
+            source: 'test',
+          },
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      providerMessageId: 'webhook-message-1',
+      providerResponseJson: {
+        id: 'webhook-message-1',
+        ok: true,
+      },
+    });
+  });
+
+  it('marks generic webhook rate limits as retryable', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: 'Too many requests',
+        }),
+        { status: 429 },
+      ),
+    );
+    const notifier = createWebhookNotifier(fetchMock);
+
+    await expect(
+      notifier.send(
+        { text: 'hello' },
+        {
+          channel: {
+            id: 'channel-webhook',
+            name: 'Webhook',
+            type: 'webhook',
+            enabled: true,
+            config: {
+              url: 'https://example.com/hooks/notify',
+            },
+            secrets: {},
+          },
+          idempotencyKey: 'outbound-webhook-1',
+          now: () => 1_000,
+          signal: new AbortController().signal,
+        },
+      ),
+    ).rejects.toMatchObject({
+      retryable: true,
+      statusCode: 429,
+    } satisfies Partial<WebhookNotifierError>);
   });
 });

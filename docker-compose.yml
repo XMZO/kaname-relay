@@ -1,9 +1,9 @@
 services:
   kaname-relay:
-    image: ${KANAME_IMAGE:-ghcr.io/xmzo/kaname-relay:latest}
+    image: ghcr.io/xmzo/kaname-relay:latest
     restart: unless-stopped
     ports:
-      - '${PORT:-3000}:3000'
+      - '3000:3000'
     volumes:
       - ./data:/data
     environment:
@@ -11,10 +11,10 @@ services:
       HOST: 0.0.0.0
       PORT: 3000
       DATABASE_URL: file:/data/kaname-relay.sqlite
-      APP_SECRET: ${APP_SECRET:?set APP_SECRET to a stable random value}
+      APP_SECRET: ${APP_SECRET:-}
       KANAME_WEB_DIR: /app/apps/web/dist
       KANAME_MIGRATIONS_DIR: /app/packages/store/migrations
-      TZ: ${TZ:-Asia/Shanghai}
+      TZ: Asia/Shanghai
     healthcheck:
       test:
         [

@@ -15,7 +15,11 @@ import {
   type ProcessPendingResult,
   type SecretCodec,
 } from '@kaname-relay/core';
-import { createResendNotifier, createTelegramNotifier } from '@kaname-relay/notifiers';
+import {
+  createResendNotifier,
+  createTelegramNotifier,
+  createWebhookNotifier,
+} from '@kaname-relay/notifiers';
 import { createSmtpNotifier } from '@kaname-relay/notifiers/smtp.node';
 import {
   applySqliteMigrations,
@@ -28,12 +32,18 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import Database from 'better-sqlite3';
 import { Hono } from 'hono';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { AdminHttpError, mountAdminRoutes, type AdminRoutesOptions } from './admin.js';
+import {
+  AdminHttpError,
+  mountAdminRoutes,
+  RETENTION_SETTING,
+  RETRY_SETTING,
+  type AdminRoutesOptions,
+} from './admin.js';
 
 export interface ServerAppOptions {
   store: SqliteStore;
@@ -73,6 +83,17 @@ export interface ProcessSchedulerOptions {
   leaseMs?: number;
   sendTimeoutMs?: number;
   maxConcurrency?: number;
+  loadRetrySettings?: () => Promise<Partial<RetrySettings>>;
+}
+
+export interface RetrySettings {
+  maxAttempts: number;
+  initialDelayMs: number;
+  multiplier: number;
+  maxDelayMs: number;
+  jitterRatio: number;
+  leaseMs: number;
+  sendTimeoutMs: number;
 }
 
 export interface ProcessScheduler {
@@ -92,6 +113,15 @@ const DEFAULT_RETENTION: RetentionConfig = {
   receivedRetentionMs: 30 * 24 * 60 * 60 * 1_000,
   limit: 100,
   intervalMs: 60 * 60 * 1_000,
+};
+const DEFAULT_RETRY_SETTINGS: RetrySettings = {
+  maxAttempts: 10,
+  initialDelayMs: 30_000,
+  multiplier: 2,
+  maxDelayMs: 1_800_000,
+  jitterRatio: 0.2,
+  leaseMs: 90_000,
+  sendTimeoutMs: 15_000,
 };
 
 export function createServerApp(options: ServerAppOptions): Hono {
@@ -201,7 +231,7 @@ export function createServerApp(options: ServerAppOptions): Hono {
       inboundDedupeKey: parsedEvent.inboundDedupeKey,
       eventType: parsedEvent.eventType,
       now: now(),
-      maxAttempts,
+      maxAttempts: await configuredMaxAttempts(options.store, maxAttempts),
       idGenerator,
     });
 
@@ -254,6 +284,10 @@ export function createProcessScheduler(options: ProcessSchedulerOptions): Proces
       return null;
     }
 
+    const retrySettings = {
+      ...DEFAULT_RETRY_SETTINGS,
+      ...(options.loadRetrySettings ? await options.loadRetrySettings() : {}),
+    };
     const processArgs: ProcessPendingArgs = {
       store: options.store,
       notifiers: options.notifiers,
@@ -261,14 +295,14 @@ export function createProcessScheduler(options: ProcessSchedulerOptions): Proces
       idGenerator,
       limit: options.limit ?? 25,
       recoverLimit: options.recoverLimit ?? 50,
-      leaseMs: options.leaseMs ?? 90_000,
-      sendTimeoutMs: options.sendTimeoutMs ?? 15_000,
+      leaseMs: options.leaseMs ?? retrySettings.leaseMs,
+      sendTimeoutMs: options.sendTimeoutMs ?? retrySettings.sendTimeoutMs,
       maxConcurrency: options.maxConcurrency ?? 4,
       backoff: {
-        initialDelayMs: 30_000,
-        multiplier: 2,
-        maxDelayMs: 1_800_000,
-        jitterRatio: 0.2,
+        initialDelayMs: retrySettings.initialDelayMs,
+        multiplier: retrySettings.multiplier,
+        maxDelayMs: retrySettings.maxDelayMs,
+        jitterRatio: retrySettings.jitterRatio,
       },
     };
 
@@ -331,21 +365,21 @@ export function createNodeRuntime(
   applySqliteMigrations(db, runtimeMigrationsDir());
 
   const store = new SqliteStore(db);
-  const secretCodec = secretCodecFromEnv();
+  const secretCodec = secretCodecFromRuntime(databasePath);
   const notifiers = {
     resend: createResendNotifier(),
     smtp: createSmtpNotifier(),
     telegram: createTelegramNotifier(),
+    webhook: createWebhookNotifier(),
   };
   const processStore = new SqliteProcessPendingStore(store, {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
-    ...(secretCodec === undefined
-      ? {}
-      : { decryptSecrets: (secretJsonEnc: string | null) => secretCodec.decrypt(secretJsonEnc) }),
+    decryptSecrets: (secretJsonEnc: string | null) => secretCodec.decrypt(secretJsonEnc),
   });
   const schedulerOptions: ProcessSchedulerOptions = {
     store: processStore,
     notifiers,
+    loadRetrySettings: async () => configuredRetrySettings(store),
   };
 
   if (options.logger !== undefined) {
@@ -366,9 +400,7 @@ export function createNodeRuntime(
     appOptions.logger = options.logger;
   }
 
-  if (secretCodec !== undefined) {
-    appOptions.secretCodec = secretCodec;
-  }
+  appOptions.secretCodec = secretCodec;
 
   const app = createServerApp(appOptions);
   let server: ReturnType<typeof serve> | undefined;
@@ -379,7 +411,7 @@ export function createNodeRuntime(
       return;
     }
 
-    const retention = options.retention ?? DEFAULT_RETENTION;
+    const retention = await configuredRetention(store, options.retention ?? DEFAULT_RETENTION);
     await store.cleanupRetention({
       now: Date.now(),
       sentRetentionMs: retention.sentRetentionMs,
@@ -542,6 +574,139 @@ function parseStoredJsonObject(raw: string, label: string): JsonObject {
   return parsed;
 }
 
+async function configuredMaxAttempts(store: SqliteStore, fallback: number): Promise<number> {
+  const retrySettings = await configuredRetrySettings(store);
+
+  return retrySettings.maxAttempts ?? fallback;
+}
+
+async function configuredRetrySettings(store: SqliteStore): Promise<Partial<RetrySettings>> {
+  const setting = await store.getSetting(RETRY_SETTING);
+
+  if (!setting) {
+    return {};
+  }
+
+  const parsed = parseStoredJsonObject(setting.valueJson, RETRY_SETTING);
+
+  return {
+    maxAttempts: positiveIntegerSetting(
+      parsed.maxAttempts,
+      DEFAULT_RETRY_SETTINGS.maxAttempts,
+      'retry.maxAttempts',
+    ),
+    initialDelayMs: positiveIntegerSetting(
+      parsed.initialDelayMs,
+      DEFAULT_RETRY_SETTINGS.initialDelayMs,
+      'retry.initialDelayMs',
+    ),
+    multiplier: positiveNumberSetting(
+      parsed.multiplier,
+      DEFAULT_RETRY_SETTINGS.multiplier,
+      'retry.multiplier',
+    ),
+    maxDelayMs: positiveIntegerSetting(
+      parsed.maxDelayMs,
+      DEFAULT_RETRY_SETTINGS.maxDelayMs,
+      'retry.maxDelayMs',
+    ),
+    jitterRatio: nonNegativeNumberSetting(
+      parsed.jitterRatio,
+      DEFAULT_RETRY_SETTINGS.jitterRatio,
+      'retry.jitterRatio',
+    ),
+    leaseMs: positiveIntegerSetting(
+      parsed.leaseMs,
+      DEFAULT_RETRY_SETTINGS.leaseMs,
+      'retry.leaseMs',
+    ),
+    sendTimeoutMs: positiveIntegerSetting(
+      parsed.sendTimeoutMs,
+      DEFAULT_RETRY_SETTINGS.sendTimeoutMs,
+      'retry.sendTimeoutMs',
+    ),
+  };
+}
+
+async function configuredRetention(
+  store: SqliteStore,
+  fallback: RetentionConfig,
+): Promise<RetentionConfig> {
+  const setting = await store.getSetting(RETENTION_SETTING);
+
+  if (!setting) {
+    return fallback;
+  }
+
+  const parsed = parseStoredJsonObject(setting.valueJson, RETENTION_SETTING);
+  const dayMs = 24 * 60 * 60 * 1_000;
+
+  return {
+    sentRetentionMs:
+      positiveIntegerSetting(
+        parsed.sentRetentionDays,
+        Math.max(1, Math.ceil(fallback.sentRetentionMs / dayMs)),
+        'retention.sentRetentionDays',
+      ) * dayMs,
+    receivedRetentionMs:
+      positiveIntegerSetting(
+        parsed.receivedRetentionDays,
+        Math.max(1, Math.ceil(fallback.receivedRetentionMs / dayMs)),
+        'retention.receivedRetentionDays',
+      ) * dayMs,
+    limit: positiveIntegerSetting(parsed.cleanupLimit, fallback.limit, 'retention.cleanupLimit'),
+    intervalMs: fallback.intervalMs,
+  };
+}
+
+function positiveIntegerSetting(
+  value: JsonValue | undefined,
+  fallback: number,
+  label: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+
+  return value;
+}
+
+function positiveNumberSetting(
+  value: JsonValue | undefined,
+  fallback: number,
+  label: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${label} must be a positive number`);
+  }
+
+  return value;
+}
+
+function nonNegativeNumberSetting(
+  value: JsonValue | undefined,
+  fallback: number,
+  label: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative number`);
+  }
+
+  return value;
+}
+
 async function decryptSecretJson(
   secretJsonEnc: string | null,
   ownerId: string,
@@ -659,10 +824,66 @@ function defaultWebDir(): string | null {
   return resolve(fromEnv ?? resolve('apps', 'web', 'dist'));
 }
 
-function secretCodecFromEnv(): SecretCodec | undefined {
-  const appSecret = process.env.APP_SECRET ?? process.env.KANAME_APP_SECRET;
+function secretCodecFromRuntime(databasePath: string): SecretCodec {
+  const configuredSecret = nonEmptyString(process.env.APP_SECRET ?? process.env.KANAME_APP_SECRET);
+  const configuredSecretFile = nonEmptyString(process.env.KANAME_APP_SECRET_FILE);
+  const secretFile = configuredSecretFile
+    ? resolve(configuredSecretFile)
+    : resolve(dirname(databasePath), '.kaname-app-secret');
 
-  return appSecret ? createAesGcmSecretCodec(appSecret) : undefined;
+  if (configuredSecret) {
+    persistSecretIfMissing(secretFile, configuredSecret);
+    return createAesGcmSecretCodec(configuredSecret);
+  }
+
+  if (existsSync(secretFile)) {
+    return createAesGcmSecretCodec(readRequiredSecret(secretFile));
+  }
+
+  const generatedSecret = randomBytes(32).toString('hex');
+  persistSecretIfMissing(secretFile, generatedSecret);
+
+  return createAesGcmSecretCodec(readRequiredSecret(secretFile));
+}
+
+function persistSecretIfMissing(secretFile: string, secret: string): void {
+  mkdirSync(dirname(secretFile), { recursive: true });
+
+  if (existsSync(secretFile)) {
+    return;
+  }
+
+  try {
+    writeFileSync(secretFile, `${secret}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (!isFileExistsError(error)) {
+      throw error;
+    }
+  }
+}
+
+function readRequiredSecret(secretFile: string): string {
+  const secret = readFileSync(secretFile, 'utf8').trim();
+
+  if (secret.length === 0) {
+    throw new Error(`runtime app secret file is empty: ${secretFile}`);
+  }
+
+  return secret;
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+
+  return normalized ? normalized : undefined;
+}
+
+function isFileExistsError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'EEXIST';
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

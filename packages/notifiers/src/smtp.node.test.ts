@@ -108,4 +108,53 @@ describe('createSmtpNotifier', () => {
       providerCode: 'EENVELOPE',
     } satisfies Partial<SmtpNotifierError>);
   });
+
+  it('supports Komari-style LOGIN auth and STARTTLS for Outlook SMTP', async () => {
+    const sendMail = vi.fn().mockResolvedValue({
+      messageId: 'smtp-outlook-1',
+    });
+    const factory = vi.fn<SmtpTransportFactory>().mockReturnValue({
+      sendMail,
+    });
+    const notifier = createSmtpNotifier(factory);
+
+    await notifier.send(
+      { text: 'hello' },
+      {
+        channel: {
+          id: 'channel-smtp',
+          name: 'Outlook SMTP',
+          type: 'smtp',
+          enabled: true,
+          config: {
+            host: 'smtp.office365.com',
+            port: 587,
+            use_ssl: true,
+            use_login_auth: true,
+            from: 'alerts@example.com',
+            to: 'ops@example.com',
+          },
+          secrets: {
+            user: 'alerts@example.com',
+            pass: 'app-password',
+          },
+        },
+        idempotencyKey: 'outbound-smtp-1',
+        now: () => 1_000,
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(factory).toHaveBeenCalledWith({
+      host: 'smtp.office365.com',
+      port: 587,
+      secure: false,
+      requireTLS: true,
+      authMethod: 'LOGIN',
+      auth: {
+        user: 'alerts@example.com',
+        pass: 'app-password',
+      },
+    });
+  });
 });

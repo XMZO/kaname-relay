@@ -85,9 +85,31 @@ Rule template:
 }
 ```
 
+## Webhook Channel
+
+Generic webhook channels send the rendered notification message as JSON over `fetch`. Config headers are non-secret; secret headers are encrypted and never returned by the API.
+
+```json
+{
+  "type": "webhook",
+  "config": {
+    "url": "https://example.com/hooks/notify",
+    "headers": {
+      "x-route": "ops"
+    },
+    "idempotencyHeader": "Idempotency-Key"
+  },
+  "secrets": {
+    "headers": {
+      "authorization": "Bearer token"
+    }
+  }
+}
+```
+
 ## Resend Channel
 
-Channel:
+Create this from the WebUI: Channels -> Type `Resend email`. The JSON below mirrors what the form stores; it is not an `.env` file.
 
 ```json
 {
@@ -104,7 +126,7 @@ Channel:
 
 ## SMTP Channel
 
-SMTP is Node/VPS-only and is not included in the Cloudflare Worker bundle.
+SMTP is Node/VPS-only and is not included in the Cloudflare Worker bundle. Create this from the WebUI: Channels -> Type `SMTP email`. The host, port, SSL/STARTTLS, LOGIN auth, username, and password/app password are all WebUI fields stored in the channel config/secret bundle; no SMTP `.env` variables are required.
 
 ```json
 {
@@ -112,7 +134,8 @@ SMTP is Node/VPS-only and is not included in the Cloudflare Worker bundle.
   "config": {
     "host": "smtp.example.com",
     "port": 587,
-    "secure": false,
+    "use_ssl": true,
+    "use_login_auth": false,
     "from": "alerts@example.com",
     "to": "ops@example.com"
   },
@@ -122,3 +145,5 @@ SMTP is Node/VPS-only and is not included in the Cloudflare Worker bundle.
   }
 }
 ```
+
+For Outlook/Office365 SMTP, use `smtp.office365.com`, port `587`, and set `use_login_auth` to `true`. The `use_ssl: true` + `port: 587` combination uses STARTTLS, matching Komari's SMTP behavior.

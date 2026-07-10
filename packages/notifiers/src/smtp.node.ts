@@ -6,6 +6,8 @@ export interface SmtpTransportOptions {
   host: string;
   port: number;
   secure: boolean;
+  requireTLS?: boolean;
+  authMethod?: string;
   auth?: {
     user: string;
     pass: string;
@@ -53,7 +55,19 @@ export function createSmtpNotifier(
     async send(message, context) {
       const host = requiredString(context.channel.config.host, 'smtp host');
       const port = optionalNumber(context.channel.config.port) ?? 587;
-      const secure = optionalBoolean(context.channel.config.secure) ?? port === 465;
+      const useSsl = optionalBoolean(
+        context.channel.config.use_ssl ?? context.channel.config.useSsl,
+      );
+      const secure =
+        useSsl === undefined
+          ? (optionalBoolean(context.channel.config.secure) ?? port === 465)
+          : useSsl && port === 465;
+      const requireTLS =
+        optionalBoolean(
+          context.channel.config.requireTLS ??
+            context.channel.config.requireTls ??
+            context.channel.config.require_tls,
+        ) ?? (useSsl === true && port !== 465 ? true : undefined);
       const from = requiredString(context.channel.config.from, 'smtp from');
       const to = requiredStringOrStringArray(context.channel.config.to, 'smtp to');
       const subject =
@@ -62,6 +76,10 @@ export function createSmtpNotifier(
         'Kaname Relay notification';
       const user = optionalString(context.channel.secrets.user);
       const pass = optionalString(context.channel.secrets.pass);
+      const useLoginAuth =
+        optionalBoolean(
+          context.channel.config.use_login_auth ?? context.channel.config.useLoginAuth,
+        ) ?? false;
       const transportOptions: SmtpTransportOptions = {
         host,
         port,
@@ -83,6 +101,14 @@ export function createSmtpNotifier(
           user,
           pass,
         };
+      }
+
+      if (requireTLS !== undefined) {
+        transportOptions.requireTLS = requireTLS;
+      }
+
+      if (useLoginAuth) {
+        transportOptions.authMethod = 'LOGIN';
       }
 
       if (message.html !== undefined) {
@@ -150,10 +176,14 @@ function smtpError(error: unknown): SmtpNotifierError {
 
   return new SmtpNotifierError(
     `smtp send failed: ${message}`,
-    responseCode === undefined ? true : responseCode >= 400 && responseCode < 500,
+    responseCode === undefined ? true : isRetryableSmtpStatus(responseCode),
     responseCode,
     code,
   );
+}
+
+function isRetryableSmtpStatus(status: number): boolean {
+  return status === 421 || status === 429 || status === 450 || status === 451 || status === 452;
 }
 
 function requiredString(value: JsonValue | undefined, label: string): string {

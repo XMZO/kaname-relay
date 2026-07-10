@@ -1,4 +1,10 @@
-import type { JsonObject, JsonValue, Notifier, NotifierResult } from '@kaname-relay/core';
+import type {
+  JsonObject,
+  JsonValue,
+  NotificationMessage,
+  Notifier,
+  NotifierResult,
+} from '@kaname-relay/core';
 
 type FetchLike = typeof fetch;
 
@@ -23,6 +29,18 @@ export class ResendNotifierError extends Error {
   ) {
     super(message);
     this.name = 'ResendNotifierError';
+  }
+}
+
+export class WebhookNotifierError extends Error {
+  public constructor(
+    message: string,
+    public readonly retryable: boolean,
+    public readonly statusCode?: number,
+    public readonly providerCode?: string,
+  ) {
+    super(message);
+    this.name = 'WebhookNotifierError';
   }
 }
 
@@ -156,6 +174,58 @@ export function createResendNotifier(fetchFn: FetchLike = fetch): Notifier {
   };
 }
 
+export function createWebhookNotifier(fetchFn: FetchLike = fetch): Notifier {
+  return {
+    type: 'webhook',
+    async send(message, context) {
+      const url = webhookRequiredString(context.channel.config.url, 'webhook url');
+      const method = optionalString(context.channel.config.method)?.toUpperCase() ?? 'POST';
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+      };
+
+      mergeHeaders(headers, context.channel.config.headers);
+      mergeHeaders(headers, context.channel.secrets.headers);
+
+      const idempotencyHeader = optionalString(context.channel.config.idempotencyHeader);
+
+      if (idempotencyHeader && context.idempotencyKey.length > 0) {
+        headers[idempotencyHeader.toLowerCase()] = context.idempotencyKey;
+      }
+
+      const response = await fetchFn(url, {
+        method,
+        headers,
+        body: JSON.stringify(webhookBody(message)),
+        signal: context.signal,
+      });
+      const responseBody = await readWebhookResponse(response);
+
+      if (!response.ok) {
+        throw new WebhookNotifierError(
+          webhookErrorMessage(response.status, responseBody),
+          isRetryableStatus(response.status),
+          response.status,
+        );
+      }
+
+      const result: NotifierResult = {};
+
+      if (responseBody !== undefined) {
+        result.providerResponseJson = responseBody;
+
+        const messageId = providerMessageId(responseBody);
+
+        if (messageId !== undefined) {
+          result.providerMessageId = messageId;
+        }
+      }
+
+      return result;
+    },
+  };
+}
+
 async function readTelegramResponse(response: Response): Promise<JsonObject> {
   const text = await response.text();
 
@@ -200,6 +270,78 @@ function resendErrorMessage(status: number, responseBody: JsonObject): string {
   const message = optionalString(responseBody.message);
 
   return message ? `resend send failed (${status}): ${message}` : `resend send failed (${status})`;
+}
+
+function webhookBody(message: NotificationMessage): JsonObject {
+  const body: JsonObject = {
+    text: message.text,
+  };
+
+  if (message.title !== undefined) {
+    body.title = message.title;
+  }
+
+  if (message.html !== undefined) {
+    body.html = message.html;
+  }
+
+  if (message.markdown !== undefined) {
+    body.markdown = message.markdown;
+  }
+
+  if (message.tags !== undefined) {
+    body.tags = message.tags;
+  }
+
+  if (message.metadata !== undefined) {
+    body.metadata = message.metadata;
+  }
+
+  return body;
+}
+
+function mergeHeaders(target: Record<string, string>, value: JsonValue | undefined): void {
+  if (!isJsonObject(value)) {
+    return;
+  }
+
+  for (const [key, headerValue] of Object.entries(value)) {
+    if (typeof headerValue === 'string') {
+      target[key.toLowerCase()] = headerValue;
+    }
+  }
+}
+
+async function readWebhookResponse(response: Response): Promise<JsonObject | undefined> {
+  const text = await response.text();
+
+  if (text.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as JsonValue;
+
+    return isJsonObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function webhookErrorMessage(status: number, responseBody: JsonObject | undefined): string {
+  const detail = responseBody
+    ? (optionalString(responseBody.message) ?? optionalString(responseBody.error))
+    : undefined;
+
+  return detail ? `webhook send failed (${status}): ${detail}` : `webhook send failed (${status})`;
+}
+
+function webhookRequiredString(value: JsonValue | undefined, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new WebhookNotifierError(`missing ${label}`, false);
+  }
+
+  return value;
 }
 
 function isRetryableStatus(status: number): boolean {

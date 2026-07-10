@@ -254,6 +254,88 @@ describe('admin API', () => {
     );
   });
 
+  it('manages settings and changes the admin password', async () => {
+    const { store } = createHarness();
+    const app = createServerApp({
+      store,
+      now: () => 30_000,
+      idGenerator: () => 'id-settings',
+    });
+    const auth = await initialize(app);
+
+    const defaults = await app.request('/api/admin/settings', {
+      headers: {
+        cookie: auth.cookie,
+      },
+    });
+    expect(defaults.status).toBe(200);
+    await expect(defaults.json()).resolves.toMatchObject({
+      retention: {
+        sentRetentionDays: 30,
+        receivedRetentionDays: 30,
+        cleanupLimit: 100,
+      },
+      retry: {
+        maxAttempts: 10,
+        initialDelayMs: 30_000,
+      },
+    });
+
+    const saved = await app.request('/api/admin/settings', {
+      method: 'PATCH',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        retention: {
+          sentRetentionDays: 7,
+          receivedRetentionDays: 14,
+          cleanupLimit: 25,
+        },
+        retry: {
+          maxAttempts: 3,
+          initialDelayMs: 1_000,
+          multiplier: 2,
+          maxDelayMs: 60_000,
+          jitterRatio: 0,
+          leaseMs: 30_000,
+          sendTimeoutMs: 5_000,
+        },
+      }),
+    });
+    expect(saved.status).toBe(200);
+    await expect(saved.json()).resolves.toMatchObject({
+      retention: {
+        sentRetentionDays: 7,
+        receivedRetentionDays: 14,
+        cleanupLimit: 25,
+      },
+      retry: {
+        maxAttempts: 3,
+        sendTimeoutMs: 5_000,
+      },
+    });
+
+    const password = await app.request('/api/admin/password', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        currentPassword: 'correct horse battery staple',
+        newPassword: 'new correct horse battery staple',
+      }),
+    });
+    expect(password.status).toBe(200);
+
+    const login = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        password: 'new correct horse battery staple',
+      }),
+    });
+    expect(login.status).toBe(200);
+  });
+
   it('lists outbox and sent-log rows, cancels pending work, and replays dead work', async () => {
     const { db, store } = createHarness();
     let id = 0;
@@ -292,6 +374,23 @@ describe('admin API', () => {
           status: 'dead',
         },
       ],
+    });
+
+    const filteredOutbox = await app.request(
+      '/api/admin/outbox?sourceId=source-admin&channelId=channel-admin&createdFrom=1000&createdTo=1000',
+      {
+        headers: {
+          cookie: auth.cookie,
+        },
+      },
+    );
+    expect(filteredOutbox.status).toBe(200);
+    await expect(filteredOutbox.json()).resolves.toMatchObject({
+      outbox: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'dead-outbox',
+        }),
+      ]),
     });
 
     const replay = await app.request('/api/admin/outbox/dead-outbox/replay', {
