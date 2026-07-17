@@ -70,6 +70,26 @@ describe('built-in webhook source parsers', () => {
     });
   });
 
+  it('does not dedupe Komari manual test notifications', () => {
+    const event = parseWebhookSourceEvent({
+      sourceType: 'komari',
+      payload: {
+        title: 'Test',
+        message: '',
+        dedupeKey: 'Test:',
+      },
+      config: {},
+      payloadHash: 'hash-komari-test',
+    });
+
+    expect(event.inboundDedupeKey).toBeNull();
+    expect(event.payload).toMatchObject({
+      title: 'Test',
+      message: '',
+      eventType: 'komari.notification',
+    });
+  });
+
   it('parses Wallos payloads and honors configured dedupe paths', () => {
     const event = parseWebhookSourceEvent({
       sourceType: 'wallos',

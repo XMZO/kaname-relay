@@ -681,6 +681,71 @@ describe('server webhook endpoint', () => {
     });
   });
 
+  it('enqueues repeated Komari manual test notifications', async () => {
+    const { db, store } = createHarness();
+    seedBuiltinSource(db, {
+      sourceId: 'source-komari-test',
+      sourceType: 'komari',
+      ruleId: 'rule-komari-test',
+      templateText: '{{payload.message}}',
+    });
+    let id = 0;
+    const app = createServerApp({
+      store,
+      now: () => 10_000,
+      idGenerator: () => `id-${++id}`,
+    });
+    const body = JSON.stringify({
+      title: 'Test',
+      message: '',
+      dedupeKey: 'Test:',
+    });
+
+    const first = await app.request('/hooks/source-komari-test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    const second = await app.request('/hooks/source-komari-test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    await expect(first.json()).resolves.toMatchObject({ duplicate: false, outboxCount: 1 });
+    await expect(second.json()).resolves.toMatchObject({ duplicate: false, outboxCount: 1 });
+
+    const received = db
+      .prepare(
+        `
+        SELECT COUNT(*) AS count
+        FROM received_events
+        WHERE source_id = 'source-komari-test'
+        `,
+      )
+      .get() as { count: number };
+    const outbox = db
+      .prepare(
+        `
+        SELECT inbound_dedupe_key, message_json
+        FROM outbox
+        WHERE source_id = 'source-komari-test'
+        ORDER BY created_at ASC, id ASC
+        `,
+      )
+      .all() as Array<{ inbound_dedupe_key: string | null; message_json: string }>;
+
+    expect(received.count).toBe(2);
+    expect(outbox).toHaveLength(2);
+    expect(outbox.every((row) => row.inbound_dedupe_key === null)).toBe(true);
+    expect(outbox.map((row) => JSON.parse(row.message_json))).toEqual([
+      { text: 'Test', title: 'komari.notification' },
+      { text: 'Test', title: 'komari.notification' },
+    ]);
+  });
+
   it('processes a posted webhook through the SQLite process store seam into sent_log', async () => {
     const { db, store } = createHarness();
     let id = 0;

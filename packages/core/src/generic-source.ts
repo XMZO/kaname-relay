@@ -219,10 +219,13 @@ interface NotificationStyleInput {
 function parseNotificationStyleEvent(input: NotificationStyleInput): ParsedGenericEvent {
   const config = genericSourceConfig(input.config);
   const eventType = eventTypeFor(input.payload, config, input.fallbackEventType);
-  const inboundDedupeKey =
-    configuredDedupeKey(input.payload, config) ??
-    firstKey(input.payload, ['dedupeKey', 'dedupe_key', 'id', 'eventId', 'event_id', 'uuid']) ??
-    `${input.sourceType}:${input.payloadHash}`;
+  // Komari emits the same title for every manual test, so treating it as a
+  // stable event would make its test button work only once per retention window.
+  const inboundDedupeKey = isKomariTestNotification(input)
+    ? null
+    : (configuredDedupeKey(input.payload, config) ??
+      firstKey(input.payload, ['dedupeKey', 'dedupe_key', 'id', 'eventId', 'event_id', 'uuid']) ??
+      `${input.sourceType}:${input.payloadHash}`);
 
   return {
     inboundDedupeKey,
@@ -232,6 +235,10 @@ function parseNotificationStyleEvent(input: NotificationStyleInput): ParsedGener
       title: firstString(input.payload, input.titlePaths),
     }),
   };
+}
+
+function isKomariTestNotification(input: NotificationStyleInput): boolean {
+  return input.sourceType === 'komari' && firstString(input.payload, ['title'])?.trim() === 'Test';
 }
 
 function configuredDedupeKey(payload: JsonObject, config: GenericSourceConfig): string | null {
