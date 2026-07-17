@@ -6,6 +6,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { processPending, type Notifier } from '@kaname-relay/core';
+import {
+  KOMARI_NOTIFICATION_TEMPLATE,
+  KOMARI_SAMPLE_PAYLOAD,
+  KOMARI_SOURCE_CONFIG,
+} from '@kaname-relay/core/presets';
 import { applySqliteMigrations, SqliteProcessPendingStore, SqliteStore } from '@kaname-relay/store';
 import { createNodeRuntime, createServerApp } from './index.js';
 
@@ -744,6 +749,140 @@ describe('server webhook endpoint', () => {
       { text: 'Test', title: 'komari.notification' },
       { text: 'Test', title: 'komari.notification' },
     ]);
+  });
+
+  it('renders the shared Komari raw-event notification preset through the webhook endpoint', async () => {
+    const { db, store } = createHarness();
+    seedBuiltinSource(db, {
+      sourceId: 'source-komari-rich',
+      sourceType: 'komari',
+      ruleId: 'rule-komari-rich',
+      templateText: 'unused',
+      configJson: JSON.stringify(KOMARI_SOURCE_CONFIG),
+    });
+    db.prepare(
+      `
+      UPDATE rules
+      SET template_json = :template_json
+      WHERE id = 'rule-komari-rich'
+      `,
+    ).run({ template_json: JSON.stringify(KOMARI_NOTIFICATION_TEMPLATE) });
+    let id = 0;
+    const app = createServerApp({
+      store,
+      now: () => Date.parse('2026-07-17T12:00:00Z'),
+      idGenerator: () => `id-${++id}`,
+    });
+    const body = JSON.stringify(KOMARI_SAMPLE_PAYLOAD);
+
+    const first = await app.request('/hooks/source-komari-rich', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    const duplicate = await app.request('/hooks/source-komari-rich', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+
+    expect(first.status).toBe(202);
+    await expect(first.json()).resolves.toMatchObject({
+      duplicate: false,
+      outboxCount: 1,
+    });
+    await expect(duplicate.json()).resolves.toMatchObject({
+      duplicate: true,
+      outboxCount: 0,
+    });
+
+    const row = db
+      .prepare(
+        `
+        SELECT event_type, inbound_dedupe_key, message_json
+        FROM outbox
+        WHERE source_id = 'source-komari-rich'
+        `,
+      )
+      .get() as {
+      event_type: string;
+      inbound_dedupe_key: string;
+      message_json: string;
+    };
+    const message = JSON.parse(row.message_json) as {
+      title: string;
+      text: string;
+      metadata: unknown;
+    };
+
+    expect(row.event_type).toBe('offline');
+    expect(row.inbound_dedupe_key).toBe('komari:offline:2026-07-17T12:00:00Z:client-1');
+    expect(message.title).toBe('服务器离线');
+    expect(message.text).toContain('🇯🇵 Tokyo Node [东京]');
+    expect(message.text).toContain('节点已离线');
+    expect(message.metadata).toMatchObject({
+      telegram: {
+        parseMode: 'HTML',
+        inlineKeyboard: [
+          [
+            { text: '进入面板', url: 'https://komari.example.com' },
+            {
+              text: '实例详情',
+              url: 'https://komari.example.com/instance/client-1',
+            },
+          ],
+        ],
+      },
+    });
+
+    const send = vi.fn<Notifier['send']>().mockResolvedValue({
+      providerMessageId: 'provider-komari-rich',
+      providerResponseJson: { ok: true },
+    });
+    const result = await processPending({
+      store: new SqliteProcessPendingStore(store),
+      notifiers: {
+        telegram: {
+          type: 'telegram',
+          send,
+        },
+      },
+      now: () => Date.parse('2026-07-17T12:00:01Z'),
+      idGenerator: () => 'lease-komari-rich',
+      limit: 10,
+      recoverLimit: 10,
+      leaseMs: 90_000,
+      sendTimeoutMs: 1_000,
+      maxConcurrency: 1,
+      backoff: {
+        initialDelayMs: 30_000,
+        multiplier: 2,
+        maxDelayMs: 1_800_000,
+      },
+      random: () => 0.5,
+    });
+
+    expect(result).toMatchObject({ claimed: 1, sent: 1, retried: 0, dead: 0 });
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '服务器离线',
+        text: expect.stringContaining('节点已离线'),
+        metadata: message.metadata,
+      }),
+      expect.objectContaining({
+        channel: expect.objectContaining({ id: 'channel-1', type: 'telegram' }),
+      }),
+    );
+    const sentLog = db
+      .prepare(
+        `
+        SELECT COUNT(*) AS count
+        FROM sent_log
+        WHERE channel_id = 'channel-1'
+        `,
+      )
+      .get() as { count: number };
+    expect(sentLog.count).toBe(1);
   });
 
   it('processes a posted webhook through the SQLite process store seam into sent_log', async () => {

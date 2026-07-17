@@ -54,3 +54,5 @@ Cloudflare Worker/D1 support is deferred. Its design remains documented in `plan
 ## Examples
 
 See [docs/examples/m5-komari-wallos-email.md](docs/examples/m5-komari-wallos-email.md) for Komari, Wallos, Resend, and SMTP examples.
+
+See [docs/notification-templates.md](docs/notification-templates.md) for Liquid notification templates, Komari raw-event formatting, and Telegram inline buttons.

@@ -714,6 +714,15 @@ describe('SqliteStore outbox lease methods', () => {
     });
     insertOutboxRow(db, 'good-message', {
       outboundDedupeKey: 'good-message-dedupe',
+      messageJson: JSON.stringify({
+        text: 'hello',
+        render: {
+          renderer: 'html-image',
+          html: '<main>Hello</main>',
+          format: 'png',
+          width: 1200,
+        },
+      }),
     });
 
     const claimed = await processStore.claimDueOutbox({
@@ -726,6 +735,12 @@ describe('SqliteStore outbox lease methods', () => {
     expect(claimed.map((item) => item.id)).toEqual(['good-message']);
     expect(claimed.find((item) => item.id === 'good-message')?.message).toEqual({
       text: 'hello',
+      render: {
+        renderer: 'html-image',
+        html: '<main>Hello</main>',
+        format: 'png',
+        width: 1200,
+      },
     });
 
     await expect(getOutbox(store, 'bad-message')).resolves.toMatchObject({

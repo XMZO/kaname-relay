@@ -22,6 +22,46 @@ export interface ChannelConfig {
   secrets: JsonObject;
 }
 
+export type NotificationImageFormat = 'png' | 'jpeg' | 'webp';
+export type NotificationImageDelivery = 'attachment' | 'replace-text' | 'text-and-image';
+
+export interface NotificationRenderRequest {
+  renderer: string;
+  html: string;
+  format?: NotificationImageFormat;
+  filename?: string;
+  width?: number;
+  height?: number;
+  deviceScaleFactor?: number;
+  quality?: number;
+  fullPage?: boolean;
+  selector?: string;
+  background?: string;
+  delivery?: NotificationImageDelivery;
+  options?: JsonObject;
+}
+
+export interface NotificationAsset {
+  filename: string;
+  contentType: string;
+  data: Uint8Array;
+  altText?: string;
+}
+
+export interface NotificationRenderContext {
+  now: () => UnixMs;
+  signal: AbortSignal;
+  logger?: Logger;
+}
+
+export interface NotificationRenderer {
+  type: string;
+  render(
+    request: NotificationRenderRequest,
+    context: NotificationRenderContext,
+  ): Promise<NotificationAsset[]>;
+}
+
 export interface NotificationMessage {
   title?: string;
   text: string;
@@ -29,6 +69,7 @@ export interface NotificationMessage {
   markdown?: string;
   tags?: string[];
   metadata?: JsonObject;
+  render?: NotificationRenderRequest;
 }
 
 export interface NotifierSendContext {
@@ -37,6 +78,7 @@ export interface NotifierSendContext {
   now: () => UnixMs;
   signal: AbortSignal;
   logger?: Logger;
+  assets?: readonly NotificationAsset[];
 }
 
 export interface NotifierResult {

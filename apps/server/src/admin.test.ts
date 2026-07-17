@@ -225,6 +225,36 @@ describe('admin API', () => {
       ],
     });
 
+    const draftPreview = await app.request('/api/admin/rules/preview', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        ruleId: 'draft-rule',
+        sourceId: 'source-ui',
+        match: {},
+        template: {
+          engine: 'liquid',
+          text: '{% for item in payload.items %}{{ item.name }}{% unless forloop.last %}, {% endunless %}{% endfor %}',
+        },
+        channelIds: ['channel-ui'],
+        payload: {
+          items: [{ name: 'Ada' }, { name: 'Grace' }],
+        },
+      }),
+    });
+    expect(draftPreview.status).toBe(200);
+    await expect(draftPreview.json()).resolves.toEqual({
+      matched: true,
+      messages: [
+        {
+          channelId: 'channel-ui',
+          message: {
+            text: 'Ada, Grace',
+          },
+        },
+      ],
+    });
+
     const testSend = await app.request('/api/admin/channels/channel-ui/test', {
       method: 'POST',
       headers: adminHeaders(auth, true),
@@ -310,6 +340,37 @@ describe('admin API', () => {
     await expect(store.getRule('rule-missing-channel')).resolves.toBeNull();
   });
 
+  it('rejects invalid notification templates before saving a rule', async () => {
+    const { store } = createHarness();
+    const app = createServerApp({
+      store,
+      now: () => 12_250,
+      idGenerator: () => 'generated-id',
+    });
+    const auth = await initialize(app);
+
+    const response = await app.request('/api/admin/rules', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'rule-invalid-template',
+        name: 'Invalid template',
+        match: {},
+        template: {
+          engine: 'liquid',
+          text: '{% if payload.ok %}',
+        },
+        channelIds: [],
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining('notification template error'),
+    });
+    await expect(store.getRule('rule-invalid-template')).resolves.toBeNull();
+  });
+
   it('applies built-in Komari and Wallos source defaults when config is omitted', async () => {
     const { store } = createHarness();
     const app = createServerApp({
@@ -334,6 +395,8 @@ describe('admin API', () => {
         type: 'komari',
         config: {
           defaultEventType: 'komari.notification',
+          eventTypePath: '$.event',
+          inboundDedupePath: '$.dedupeKey',
         },
       },
     });

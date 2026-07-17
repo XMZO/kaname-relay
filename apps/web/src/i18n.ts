@@ -64,7 +64,7 @@ export const messages = {
       sourceId: 'Source ID',
       priority: 'Priority',
       matchJson: 'Match JSON',
-      templateJson: 'Template JSON',
+      templateJson: 'Notification Template JSON',
       channelIds: 'Channel IDs',
       samplePayload: 'Sample Payload',
       stopOnMatch: 'Stop on match',
@@ -85,10 +85,10 @@ export const messages = {
       preset:
         'Selecting a built-in source applies its parser defaults. Advanced JSON remains editable.',
       komariSetup:
-        'Use these values in Komari webhook sender settings. Komari has no stable event ID, so retry dedupe uses the payload hash.',
+        'Create a Komari JavaScript notification sender and paste this raw-event relay script. Formatting and delivery stay in Kaname.',
       wallosSetup:
         'Use these values in Wallos webhook notifications. Leave custom headers empty; Kaname accepts the JSON body without a Content-Type header.',
-      rulePreset: 'Apply the selected source match, message template, and sample payload.',
+      rulePreset: 'Apply the selected source match, notification template, and sample payload.',
     },
     channelTypes: {
       telegram: 'Telegram',
@@ -262,7 +262,7 @@ export const messages = {
       sourceId: '来源 ID',
       priority: '优先级',
       matchJson: '匹配 JSON',
-      templateJson: '模板 JSON',
+      templateJson: '通知模板 JSON',
       channelIds: '渠道 ID',
       samplePayload: '示例载荷',
       stopOnMatch: '命中后停止',
@@ -282,10 +282,10 @@ export const messages = {
     sourceHelp: {
       preset: '选择内置来源后会套用对应解析默认值，高级 JSON 仍可继续修改。',
       komariSetup:
-        '把以下参数填入 Komari 的 Webhook 发送设置。Komari 没有稳定事件 ID，因此重试去重使用载荷哈希。',
+        '在 Komari 新建 JavaScript 通知渠道并粘贴以下原始事件转发脚本，排版与投递都由 Kaname 管理。',
       wallosSetup:
         '把以下参数填入 Wallos 的 Webhook 通知设置。自定义标头留空即可，Kaname 不依赖 Content-Type 也能解析 JSON。',
-      rulePreset: '套用所选来源的匹配条件、消息模板和示例载荷。',
+      rulePreset: '套用所选来源的匹配条件、通知模板和示例载荷。',
     },
     channelTypes: {
       telegram: 'Telegram',

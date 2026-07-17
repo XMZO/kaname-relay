@@ -1,4 +1,12 @@
 import type { JsonObject, JsonValue, NotificationMessage } from './types.js';
+import { parseNotificationRenderRequest } from './rendering.js';
+import {
+  notificationTemplateEngine,
+  notificationTemplateVariables,
+  renderLiquidTemplate,
+  type NotificationTemplateContext,
+  type NotificationTemplateEngine,
+} from './notification-template.js';
 
 export interface GenericSourceConfig {
   inboundDedupePath?: string;
@@ -122,23 +130,32 @@ export function matchesRule(match: JsonValue, payload: JsonObject): boolean {
 
 export function renderNotificationMessage(input: RenderMessageInput): NotificationMessage {
   const template = isJsonObject(input.template) ? input.template : {};
+  const engine = notificationTemplateEngine(template);
+  const context: NotificationTemplateContext = {
+    ...input,
+    vars: notificationTemplateVariables(template),
+  };
   const fallbackText = fallbackNotificationText(input.payload);
-  const text = renderTemplateString(stringOrUndefined(template.text) ?? fallbackText, input);
+  const textTemplate = stringOrUndefined(template.text);
+  const text =
+    textTemplate === undefined
+      ? fallbackText
+      : renderNotificationTemplateString(textTemplate, input, context, engine);
   const message: NotificationMessage = {
     text: text.length > 0 ? text : fallbackText,
   };
 
-  const title = renderOptionalString(template.title, input);
+  const title = renderOptionalString(template.title, input, context, engine);
   if (title !== undefined) {
     message.title = title;
   }
 
-  const html = renderOptionalString(template.html, input);
+  const html = renderOptionalString(template.html, input, context, engine);
   if (html !== undefined) {
     message.html = html;
   }
 
-  const markdown = renderOptionalString(template.markdown, input);
+  const markdown = renderOptionalString(template.markdown, input, context, engine);
   if (markdown !== undefined) {
     message.markdown = markdown;
   }
@@ -146,7 +163,7 @@ export function renderNotificationMessage(input: RenderMessageInput): Notificati
   if (Array.isArray(template.tags)) {
     const tags = template.tags
       .filter((tag): tag is string => typeof tag === 'string')
-      .map((tag) => renderTemplateString(tag, input));
+      .map((tag) => renderNotificationTemplateString(tag, input, context, engine));
 
     if (tags.length > 0) {
       message.tags = tags;
@@ -154,7 +171,13 @@ export function renderNotificationMessage(input: RenderMessageInput): Notificati
   }
 
   if (isJsonObject(template.metadata)) {
-    message.metadata = renderTemplateJson(template.metadata, input) as JsonObject;
+    message.metadata = renderTemplateJson(template.metadata, input, context, engine) as JsonObject;
+  }
+
+  if (template.render !== undefined) {
+    message.render = parseNotificationRenderRequest(
+      renderTemplateJson(template.render, input, context, engine),
+    );
   }
 
   return message;
@@ -396,10 +419,25 @@ function stringPrefixOrSuffix(
 function renderOptionalString(
   value: JsonValue | undefined,
   input: RenderMessageInput,
+  context: NotificationTemplateContext,
+  engine: NotificationTemplateEngine,
 ): string | undefined {
   const text = stringOrUndefined(value);
 
-  return text === undefined ? undefined : renderTemplateString(text, input);
+  return text === undefined
+    ? undefined
+    : renderNotificationTemplateString(text, input, context, engine);
+}
+
+function renderNotificationTemplateString(
+  template: string,
+  input: RenderMessageInput,
+  context: NotificationTemplateContext,
+  engine: NotificationTemplateEngine,
+): string {
+  return engine === 'liquid'
+    ? renderLiquidTemplate(template, context)
+    : renderTemplateString(template, input);
 }
 
 function renderTemplateString(template: string, input: RenderMessageInput): string {
@@ -410,20 +448,25 @@ function renderTemplateString(template: string, input: RenderMessageInput): stri
   });
 }
 
-function renderTemplateJson(value: JsonValue, input: RenderMessageInput): JsonValue {
+function renderTemplateJson(
+  value: JsonValue,
+  input: RenderMessageInput,
+  context: NotificationTemplateContext,
+  engine: NotificationTemplateEngine,
+): JsonValue {
   if (typeof value === 'string') {
-    return renderTemplateString(value, input);
+    return renderNotificationTemplateString(value, input, context, engine);
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) => renderTemplateJson(item, input));
+    return value.map((item) => renderTemplateJson(item, input, context, engine));
   }
 
   if (isJsonObject(value)) {
     const rendered: JsonObject = {};
 
     for (const [key, child] of Object.entries(value)) {
-      rendered[key] = renderTemplateJson(child, input);
+      rendered[key] = renderTemplateJson(child, input, context, engine);
     }
 
     return rendered;

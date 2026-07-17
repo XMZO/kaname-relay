@@ -1,3 +1,4 @@
+import { parseNotificationRenderRequest } from '@kaname-relay/core';
 import type {
   ChannelConfig,
   CancelOutboxInput as CoreCancelOutboxInput,
@@ -7,6 +8,7 @@ import type {
   MarkOutboxDeadInput as CoreMarkOutboxDeadInput,
   MarkOutboxSentInput as CoreMarkOutboxSentInput,
   NewSentLogEntry as CoreNewSentLogEntry,
+  NotificationRenderRequest,
   OutboxItem as CoreOutboxItem,
   ProcessPendingStore,
   RecoverExpiredLeasesInput as CoreRecoverExpiredLeasesInput,
@@ -286,13 +288,28 @@ function parseNotificationMessage(
     return { ok: false, error: 'expected non-empty string field "text"' };
   }
 
+  let render: NotificationRenderRequest | undefined;
+  if (value.render !== undefined) {
+    try {
+      render = parseNotificationRenderRequest(value.render);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'invalid notification render request',
+      };
+    }
+  }
+
   return {
     ok: true,
-    value: notificationMessageFromObject(value),
+    value: notificationMessageFromObject(value, render),
   };
 }
 
-function notificationMessageFromObject(value: JsonObject): CoreOutboxItem['message'] {
+function notificationMessageFromObject(
+  value: JsonObject,
+  render?: NotificationRenderRequest,
+): CoreOutboxItem['message'] {
   const message: CoreOutboxItem['message'] = {
     text: String(value.text),
   };
@@ -315,6 +332,10 @@ function notificationMessageFromObject(value: JsonObject): CoreOutboxItem['messa
 
   if (isJsonObject(value.metadata)) {
     message.metadata = value.metadata;
+  }
+
+  if (render !== undefined) {
+    message.render = render;
   }
 
   return message;

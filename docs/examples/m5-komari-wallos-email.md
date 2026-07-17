@@ -8,39 +8,47 @@ Source:
 {
   "type": "komari",
   "config": {
-    "defaultEventType": "komari.notification"
+    "defaultEventType": "komari.notification",
+    "eventTypePath": "$.event",
+    "inboundDedupePath": "$.dedupeKey"
   }
 }
 ```
 
-Recommended Komari webhook JSON body:
-
-```json
-{
-  "title": "{{title}}",
-  "message": "{{message}}",
-  "dedupeKey": "{{title}}:{{message}}"
-}
-```
+Create a JavaScript notification sender in Komari and paste the sanitized raw-event relay script shown by the Kaname source form. The relay sends event and client fields needed by the notification template, but does not forward Komari client tokens.
 
 Rule match:
 
 ```json
 {
-  "op": "eq",
-  "path": "$.eventType",
-  "value": "komari.notification"
+  "not": {
+    "op": "eq",
+    "path": "$.event",
+    "value": "dreport"
+  }
 }
 ```
 
-Rule template:
+Minimal Liquid rule template:
 
 ```json
 {
-  "title": "Komari",
-  "text": "{{payload.title}}\n{{payload.message}}"
+  "engine": "liquid",
+  "variables": {
+    "panelUrl": "https://status.example.com"
+  },
+  "title": "{{ payload.event | komari_event_title: payload.message }}",
+  "text": "<b>{{ payload.event | komari_event_title: payload.message }}</b>\n\n{{ payload.message | komari_translate | escape }}",
+  "metadata": {
+    "telegram": {
+      "parseMode": "HTML",
+      "disableWebPagePreview": true
+    }
+  }
 }
 ```
+
+The WebUI Komari preset includes the complete single-node/multi-node layout, IP masking, country flags, traffic and memory formatting, translation, billing details, and Telegram inline buttons. See [notification templates](../notification-templates.md).
 
 ## Wallos
 

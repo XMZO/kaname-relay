@@ -9,6 +9,12 @@ export {
   renderNotificationMessage,
 } from './generic-source.js';
 export { processPending } from './process-pending.js';
+export { parseNotificationRenderRequest } from './rendering.js';
+export {
+  notificationTemplateEngine,
+  renderLiquidTemplate,
+  validateNotificationTemplate,
+} from './notification-template.js';
 export { createAesGcmSecretCodec, parseSecretJson, verifyWebhookSignature } from './secrets.js';
 export type {
   GenericSourceConfig,
@@ -17,5 +23,9 @@ export type {
   RenderMessageInput,
   SourceParseInput,
 } from './generic-source.js';
+export type {
+  NotificationTemplateContext,
+  NotificationTemplateEngine,
+} from './notification-template.js';
 export type { SecretCodec, VerifyWebhookSignatureInput } from './secrets.js';
 export type * from './types.js';

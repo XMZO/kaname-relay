@@ -1,4 +1,11 @@
 import { computed, createApp, onMounted, reactive, ref } from 'vue';
+import {
+  createKomariRelayScript,
+  KOMARI_NOTIFICATION_TEMPLATE,
+  KOMARI_RULE_MATCH,
+  KOMARI_SAMPLE_PAYLOAD,
+  KOMARI_SOURCE_CONFIG,
+} from '@kaname-relay/core/presets';
 
 import { defaultLocale, isLocale, messages, type Locale } from './i18n';
 import './styles.css';
@@ -37,18 +44,10 @@ const sourceTypePresets: Record<SourceType, SourceTypePreset> = {
     },
   },
   komari: {
-    config: {
-      defaultEventType: 'komari.notification',
-    },
-    match: {},
-    template: {
-      text: '{{payload.message}}',
-      title: '{{payload.title}}',
-    },
-    samplePayload: {
-      title: 'Node down',
-      message: 'node-1 is offline',
-    },
+    config: KOMARI_SOURCE_CONFIG,
+    match: KOMARI_RULE_MATCH,
+    template: KOMARI_NOTIFICATION_TEMPLATE,
+    samplePayload: KOMARI_SAMPLE_PAYLOAD,
   },
   wallos: {
     config: {
@@ -72,11 +71,6 @@ const sourceTypePresets: Record<SourceType, SourceTypePreset> = {
       daysUntil: '5',
     },
   },
-};
-
-const komariWebhookBody = {
-  title: '{{title}}',
-  message: '{{message}}',
 };
 
 const wallosPaymentWebhookBody = {
@@ -688,9 +682,14 @@ const app = createApp({
 
     async function previewRule(): Promise<void> {
       await run(async () => {
-        const data = await request<JsonRecord>(`/api/admin/rules/${state.ruleForm.id}/preview`, {
+        const data = await request<JsonRecord>('/api/admin/rules/preview', {
           method: 'POST',
           body: JSON.stringify({
+            ruleId: optionalText(state.ruleForm.id),
+            sourceId: optionalText(state.ruleForm.sourceId),
+            match: parseJsonObject(state.ruleForm.matchText),
+            template: parseJsonObject(state.ruleForm.templateText),
+            channelIds: splitList(state.ruleForm.channelIdsText),
             payload: parseJsonObject(state.ruleForm.samplePayloadText),
           }),
         });
@@ -867,16 +866,7 @@ const app = createApp({
       const endpoint = sourceWebhookEndpoint();
 
       if (state.sourceForm.type === 'komari') {
-        return [
-          `url: ${endpoint}`,
-          'method: POST',
-          'content_type: application/json',
-          'headers: {}',
-          'body:',
-          pretty(komariWebhookBody),
-          'username:',
-          'password:',
-        ].join('\n');
+        return createKomariRelayScript(endpoint);
       }
 
       if (state.sourceForm.type === 'wallos') {

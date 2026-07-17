@@ -1836,3 +1836,14 @@ GET    /api/admin/dashboard
 5. Cloudflare D1 使用 SQLite 语义，但 Store 层必须隐藏 SQL 支持差异：https://developers.cloudflare.com/d1/
 6. Resend 等 HTTP Email API 适合作为跨运行时 email transport；支持幂等 key 时应使用：https://resend.com/docs/dashboard/emails/idempotency-keys
 7. Worker TCP/socket 能力不作为 MVP SMTP 基础，SMTP/Nodemailer 保持 VPS-only：https://developers.cloudflare.com/workers/runtime-apis/tcp-sockets/
+
+## 17. 延后里程碑：HTML 报告生图
+
+HTML 报告生图暂不实现，但现在固定以下数据与插件契约，避免未来修改 outbox schema 或 Notifier 接口：
+
+1. 通知模板可以输出受限的 `render` 请求，包括 renderer、HTML、格式、尺寸、文件名、投递模式和 renderer 专用 JSON options。
+2. outbox 将请求保存在 `message_json` 内，后续不需要新增数据库列。
+3. 未来由 `NotificationRenderer` 把请求转成二进制 assets，再通过 `NotifierSendContext.assets` 交给渠道。
+4. 默认 Docker 镜像必须保持无浏览器；Chromium/Playwright 放进可选 Compose profile、独立 sidecar 或远程 renderer，确保 1C/512M 主机仍可只运行文本投递。
+5. 生图默认禁止页面任意联网，限制 HTML、输出、尺寸、时间和内存，清洗文件名，并沿用现有 outbox 重试与 dead-letter 语义。
+6. Telegram 后续按 photo/document 上传，SMTP/Resend 作为附件，Webhook 可按配置转发 render 请求或资产引用。

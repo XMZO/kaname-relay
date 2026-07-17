@@ -1,6 +1,7 @@
 import {
   matchesRule,
   renderNotificationMessage,
+  validateNotificationTemplate,
   type ChannelConfig,
   type JsonObject,
   type JsonValue,
@@ -9,6 +10,7 @@ import {
   type Notifier,
   type SecretCodec,
 } from '@kaname-relay/core';
+import { KOMARI_SOURCE_CONFIG } from '@kaname-relay/core/presets';
 import {
   SqliteStore,
   type ChannelRecord,
@@ -393,13 +395,16 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
 
   app.post('/api/admin/rules', async (context) => {
     const body = await readJsonObject(context);
+    const template = validatedNotificationTemplate(
+      jsonObjectOrDefault(body.template, {}, 'template'),
+    );
     const input: SaveRuleInput = {
       id: stringOrDefault(body.id, options.idGenerator()),
       name: requiredString(body.name, 'name'),
       enabled: booleanOrDefault(body.enabled, true),
       priority: numberOrDefault(body.priority, 0, 'priority'),
       matchJson: JSON.stringify(jsonObjectOrDefault(body.match, {}, 'match')),
-      templateJson: JSON.stringify(jsonObjectOrDefault(body.template, {}, 'template')),
+      templateJson: JSON.stringify(template),
       stopOnMatch: booleanOrDefault(body.stopOnMatch, false),
       channelIds: uniqueStrings(stringArrayOrDefault(body.channelIds, [])),
       now: options.now(),
@@ -451,7 +456,9 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     }
 
     if (body.template !== undefined) {
-      patch.templateJson = JSON.stringify(jsonObject(body.template, 'template'));
+      patch.templateJson = JSON.stringify(
+        validatedNotificationTemplate(jsonObject(body.template, 'template')),
+      );
     }
 
     if (stopOnMatch !== undefined) {
@@ -473,6 +480,42 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     const ruleChannels = await options.store.listRuleChannelsForRules([rule.id]);
 
     return context.json({ rule: ruleResponse(rule, ruleChannels) });
+  });
+
+  app.post('/api/admin/rules/preview', async (context) => {
+    const body = await readJsonObject(context);
+    const payload = jsonObject(body.payload, 'payload');
+    const match = jsonObjectOrDefault(body.match, {}, 'match');
+    const template = validatedNotificationTemplate(
+      jsonObjectOrDefault(body.template, {}, 'template'),
+    );
+    const matched = matchesRule(match, payload);
+    const requestedChannelIds = uniqueStrings(stringArrayOrDefault(body.channelIds, []));
+    const channelIds = requestedChannelIds.length > 0 ? requestedChannelIds : ['preview'];
+    const sourceId = optionalNullableString(body.sourceId, 'sourceId') ?? '';
+    const ruleId = optionalString(body.ruleId, 'ruleId') ?? 'preview';
+    const eventType =
+      typeof payload.eventType === 'string'
+        ? payload.eventType
+        : typeof payload.event === 'string'
+          ? payload.event
+          : null;
+    const messages = matched
+      ? channelIds.map((channelId) => ({
+          channelId,
+          message: renderNotificationMessage({
+            template,
+            payload,
+            sourceId,
+            eventType,
+            ruleId,
+            channelId,
+            now: options.now(),
+          }),
+        }))
+      : [];
+
+    return context.json({ matched, messages });
   });
 
   app.post('/api/admin/rules/:id/preview', async (context) => {
@@ -990,6 +1033,18 @@ function notificationMessageOrDefault(value: JsonValue | undefined): Notificatio
   return message;
 }
 
+function validatedNotificationTemplate(template: JsonObject): JsonObject {
+  try {
+    validateNotificationTemplate(template);
+    return template;
+  } catch (error) {
+    throw new AdminHttpError(
+      400,
+      error instanceof Error ? error.message : 'invalid notification template',
+    );
+  }
+}
+
 async function secretJsonFromBody(
   body: JsonObject,
   options: AdminRoutesOptions,
@@ -1035,9 +1090,7 @@ function defaultSourceConfig(type: string): JsonObject {
   }
 
   if (type === 'komari') {
-    return {
-      defaultEventType: 'komari.notification',
-    };
+    return { ...KOMARI_SOURCE_CONFIG };
   }
 
   if (type === 'wallos') {

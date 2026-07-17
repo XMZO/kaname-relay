@@ -53,11 +53,17 @@ export function createTelegramNotifier(fetchFn: FetchLike = fetch): Notifier {
         context.channel.config.chatId ?? context.channel.secrets.chatId,
         'telegram chatId',
       );
-      const parseMode = optionalString(context.channel.config.parseMode);
+      const telegramMetadata = telegramMessageMetadata(message);
+      const parseMode =
+        optionalString(context.channel.config.parseMode) ??
+        optionalString(telegramMetadata?.parseMode);
       const disableWebPagePreview =
         typeof context.channel.config.disableWebPagePreview === 'boolean'
           ? context.channel.config.disableWebPagePreview
-          : undefined;
+          : typeof telegramMetadata?.disableWebPagePreview === 'boolean'
+            ? telegramMetadata.disableWebPagePreview
+            : undefined;
+      const inlineKeyboard = telegramInlineKeyboard(telegramMetadata?.inlineKeyboard);
 
       const body: JsonObject = {
         chat_id: chatId,
@@ -70,6 +76,12 @@ export function createTelegramNotifier(fetchFn: FetchLike = fetch): Notifier {
 
       if (disableWebPagePreview !== undefined) {
         body.disable_web_page_preview = disableWebPagePreview;
+      }
+
+      if (inlineKeyboard !== undefined) {
+        body.reply_markup = {
+          inline_keyboard: inlineKeyboard,
+        };
       }
 
       const response = await fetchFn(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -266,6 +278,30 @@ function telegramErrorMessage(status: number, responseBody: JsonObject): string 
     : `telegram send failed (${status})`;
 }
 
+function telegramMessageMetadata(message: NotificationMessage): JsonObject | undefined {
+  const telegram = message.metadata?.telegram;
+  return isJsonObject(telegram) ? telegram : undefined;
+}
+
+function telegramInlineKeyboard(value: JsonValue | undefined): JsonObject[][] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const rows = value.slice(0, 20).flatMap((row) => {
+    if (!Array.isArray(row)) return [];
+
+    const buttons = row.slice(0, 8).flatMap((button) => {
+      if (!isJsonObject(button)) return [];
+      const text = optionalString(button.text);
+      const url = optionalString(button.url);
+      return text && url ? [{ text, url }] : [];
+    });
+
+    return buttons.length > 0 ? [buttons] : [];
+  });
+
+  return rows.length > 0 ? rows : undefined;
+}
+
 function resendErrorMessage(status: number, responseBody: JsonObject): string {
   const message = optionalString(responseBody.message);
 
@@ -295,6 +331,10 @@ function webhookBody(message: NotificationMessage): JsonObject {
 
   if (message.metadata !== undefined) {
     body.metadata = message.metadata;
+  }
+
+  if (message.render !== undefined) {
+    body.render = message.render as unknown as JsonObject;
   }
 
   return body;

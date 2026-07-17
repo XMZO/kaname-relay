@@ -6,6 +6,7 @@ import {
   parseWebhookSourceEvent,
   renderNotificationMessage,
 } from './generic-source.js';
+import { validateNotificationTemplate } from './notification-template.js';
 
 describe('generic source match DSL', () => {
   it('matches string prefixes and suffixes without enabling regex', () => {
@@ -164,5 +165,111 @@ describe('notification rendering fallbacks', () => {
         now: 1_000,
       }).text,
     ).toBe('{"count":3}');
+  });
+});
+
+describe('Liquid notification templates', () => {
+  it('renders loops, conditions, variables, metadata, and Komari filters', () => {
+    const template = {
+      engine: 'liquid',
+      variables: {
+        panelUrl: 'https://status.example.com',
+      },
+      title: '{{ payload.event | komari_event_name: payload.message }}',
+      text: [
+        '{% assign info = payload.event | komari_event: payload.message %}',
+        '<b>{{ info.title }}</b>',
+        '{% for client in payload.clients %}{{ client | country_flag }} {{ client.name | escape }} {{ client.ipv4 | hide_ip }}{% endfor %}',
+        '{{ payload.message | komari_translate }}',
+        '{{ payload.time | beijing_time: now }}',
+      ].join('\n'),
+      metadata: {
+        telegram: {
+          parseMode: 'HTML',
+          inlineKeyboard: [
+            [
+              { text: 'Panel', url: '{{ vars.panelUrl }}' },
+              {
+                text: 'Instance',
+                url: '{% if payload.clients.size == 1 %}{{ vars.panelUrl }}/instance/{{ payload.clients[0].uuid }}{% endif %}',
+              },
+            ],
+          ],
+        },
+      },
+      render: {
+        renderer: 'html-image',
+        html: '<html><body><h1>{{ payload.event | escape }}</h1></body></html>',
+        format: 'png',
+        filename: 'komari-{{ payload.event }}.png',
+        width: 1200,
+        height: 630,
+        deviceScaleFactor: 2,
+        delivery: 'text-and-image',
+      },
+    };
+
+    validateNotificationTemplate(template);
+
+    const message = renderNotificationMessage({
+      template,
+      payload: {
+        event: 'offline',
+        time: '2026-07-17T12:00:00Z',
+        message: 'Client is offline',
+        clients: [
+          {
+            uuid: 'client-1',
+            name: 'Tokyo <node>',
+            region: '东京',
+            ipv4: '192.0.2.10',
+          },
+        ],
+      },
+      sourceId: 'komari',
+      eventType: 'offline',
+      ruleId: 'komari-rich',
+      channelId: 'telegram-main',
+      now: Date.parse('2026-07-17T12:00:00Z'),
+    });
+
+    expect(message.title).toBe('offline');
+    expect(message.text).toContain('<b>服务器离线</b>');
+    expect(message.text).toContain('🇯🇵 Tokyo &lt;node&gt; 192.0.xxx.xxx');
+    expect(message.text).toContain('节点已离线');
+    expect(message.text).toContain('2026-07-17 20:00:00');
+    expect(message.metadata).toEqual({
+      telegram: {
+        parseMode: 'HTML',
+        inlineKeyboard: [
+          [
+            { text: 'Panel', url: 'https://status.example.com' },
+            {
+              text: 'Instance',
+              url: 'https://status.example.com/instance/client-1',
+            },
+          ],
+        ],
+      },
+    });
+    expect(message.render).toEqual({
+      renderer: 'html-image',
+      html: '<html><body><h1>offline</h1></body></html>',
+      format: 'png',
+      filename: 'komari-offline.png',
+      width: 1200,
+      height: 630,
+      deviceScaleFactor: 2,
+      delivery: 'text-and-image',
+    });
+  });
+
+  it('rejects invalid engines and malformed Liquid at validation time', () => {
+    expect(() => validateNotificationTemplate({ engine: 'javascript', text: 'return 1' })).toThrow(
+      'unsupported notification template engine',
+    );
+    expect(() =>
+      validateNotificationTemplate({ engine: 'liquid', text: '{% if payload.ok %}' }),
+    ).toThrow('notification template error');
   });
 });

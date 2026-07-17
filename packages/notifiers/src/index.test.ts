@@ -68,6 +68,61 @@ describe('createTelegramNotifier', () => {
     });
   });
 
+  it('applies Telegram formatting and inline buttons from notification metadata', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ ok: true, result: { message_id: 43 } }), { status: 200 }),
+      );
+    const notifier = createTelegramNotifier(fetchMock);
+
+    await notifier.send(
+      {
+        text: '<b>Node offline</b>',
+        metadata: {
+          telegram: {
+            parseMode: 'HTML',
+            disableWebPagePreview: true,
+            inlineKeyboard: [
+              [
+                { text: 'Panel', url: 'https://status.example.com' },
+                { text: 'Empty URL', url: '' },
+              ],
+            ],
+          },
+        },
+      },
+      {
+        channel: {
+          id: 'channel-1',
+          name: 'Telegram',
+          type: 'telegram',
+          enabled: true,
+          config: { chatId: '12345' },
+          secrets: { botToken: 'token' },
+        },
+        idempotencyKey: 'outbound-2',
+        now: () => 1_000,
+        signal: new AbortController().signal,
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.telegram.org/bottoken/sendMessage',
+      expect.objectContaining({
+        body: JSON.stringify({
+          chat_id: '12345',
+          text: '<b>Node offline</b>',
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+          reply_markup: {
+            inline_keyboard: [[{ text: 'Panel', url: 'https://status.example.com' }]],
+          },
+        }),
+      }),
+    );
+  });
+
   it('marks Telegram rate limits as retryable', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
@@ -237,6 +292,11 @@ describe('createWebhookNotifier', () => {
         metadata: {
           source: 'test',
         },
+        render: {
+          renderer: 'html-image',
+          html: '<main>hello</main>',
+          format: 'png',
+        },
       },
       {
         channel: {
@@ -279,6 +339,11 @@ describe('createWebhookNotifier', () => {
           tags: ['ops'],
           metadata: {
             source: 'test',
+          },
+          render: {
+            renderer: 'html-image',
+            html: '<main>hello</main>',
+            format: 'png',
           },
         }),
       }),
