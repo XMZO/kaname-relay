@@ -92,7 +92,7 @@ function adminHeaders(auth: AuthSession, contentType = false): Record<string, st
 }
 
 describe('admin API', () => {
-  it('initializes auth and manages sources, channels, rules, preview, and test sends', async () => {
+  it('initializes auth and manages sources, channels, templates, rules, preview, and test sends', async () => {
     const { store } = createHarness();
     let id = 0;
     const send = vi.fn<Notifier['send']>().mockResolvedValue({
@@ -179,12 +179,59 @@ describe('admin API', () => {
     expect(channelBody.channel.hasSecret).toBe(true);
     expect(JSON.stringify(channelBody)).not.toContain('never-echo-token');
 
+    const templateResponse = await app.request('/api/admin/templates', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'template-ui',
+        name: 'UI Template',
+        template: {
+          text: 'Shared {{payload.name}}',
+          title: '{{eventType}}',
+        },
+        samplePayload: {
+          eventType: 'demo.created',
+          name: 'Ada',
+        },
+      }),
+    });
+    expect(templateResponse.status).toBe(201);
+    await expect(templateResponse.json()).resolves.toMatchObject({
+      template: {
+        id: 'template-ui',
+        name: 'UI Template',
+        template: {
+          text: 'Shared {{payload.name}}',
+        },
+      },
+    });
+
+    const templatePreview = await app.request('/api/admin/templates/preview', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        template: {
+          text: 'Preview {{payload.name}}',
+        },
+        payload: {
+          name: 'Ada',
+        },
+      }),
+    });
+    expect(templatePreview.status).toBe(200);
+    await expect(templatePreview.json()).resolves.toEqual({
+      message: {
+        text: 'Preview Ada',
+      },
+    });
+
     const ruleResponse = await app.request('/api/admin/rules', {
       method: 'POST',
       headers: adminHeaders(auth, true),
       body: JSON.stringify({
         id: 'rule-ui',
         sourceId: 'source-ui',
+        templateId: 'template-ui',
         name: 'UI Rule',
         priority: 10,
         match: {
@@ -193,7 +240,7 @@ describe('admin API', () => {
           value: 'demo',
         },
         template: {
-          text: 'Hello {{payload.name}}',
+          text: 'Inline {{payload.name}}',
           title: '{{eventType}}',
         },
         channelIds: ['channel-ui'],
@@ -218,11 +265,38 @@ describe('admin API', () => {
         {
           channelId: 'channel-ui',
           message: {
-            text: 'Hello Ada',
+            text: 'Shared Ada',
             title: 'demo.created',
           },
         },
       ],
+    });
+
+    const updateTemplate = await app.request('/api/admin/templates/template-ui', {
+      method: 'PATCH',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        name: 'UI Template Updated',
+        template: {
+          text: 'Updated {{payload.name}}',
+          title: '{{eventType}}',
+        },
+      }),
+    });
+    expect(updateTemplate.status).toBe(200);
+
+    const updatedPreview = await app.request('/api/admin/rules/rule-ui/preview', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        payload: {
+          eventType: 'demo.updated',
+          name: 'Grace',
+        },
+      }),
+    });
+    await expect(updatedPreview.json()).resolves.toMatchObject({
+      messages: [{ message: { text: 'Updated Grace' } }],
     });
 
     const draftPreview = await app.request('/api/admin/rules/preview', {
@@ -282,6 +356,13 @@ describe('admin API', () => {
         }),
       }),
     );
+
+    const deleteTemplate = await app.request('/api/admin/templates/template-ui', {
+      method: 'DELETE',
+      headers: adminHeaders(auth),
+    });
+    expect(deleteTemplate.status).toBe(200);
+    await expect(store.getRule('rule-ui')).resolves.toMatchObject({ templateId: null });
   });
 
   it('rejects rules that reference missing sources or channels with a readable 400', async () => {
@@ -336,8 +417,27 @@ describe('admin API', () => {
     await expect(missingChannel.json()).resolves.toEqual({
       error: 'unknown channel IDs: 5370698809',
     });
+
+    const missingTemplate = await app.request('/api/admin/rules', {
+      method: 'POST',
+      headers: adminHeaders(auth, true),
+      body: JSON.stringify({
+        id: 'rule-missing-template',
+        sourceId: 'source-valid',
+        templateId: 'template-does-not-exist',
+        name: 'Missing template',
+        match: {},
+        template: { text: 'fallback' },
+        channelIds: [],
+      }),
+    });
+    expect(missingTemplate.status).toBe(400);
+    await expect(missingTemplate.json()).resolves.toEqual({
+      error: 'unknown notification template ID: template-does-not-exist',
+    });
     await expect(store.getRule('rule-missing-source')).resolves.toBeNull();
     await expect(store.getRule('rule-missing-channel')).resolves.toBeNull();
+    await expect(store.getRule('rule-missing-template')).resolves.toBeNull();
   });
 
   it('rejects invalid notification templates before saving a rule', async () => {

@@ -489,9 +489,10 @@ async function buildOutboxItems(input: BuildOutboxInput): Promise<NewOutboxItem[
     }
 
     const channels = await input.store.listEnabledRuleChannels(rule.id);
+    const ruleTemplateJson = await resolveRuleTemplateJson(input.store, rule);
 
     for (const channel of channels) {
-      const templateJson = channel.templateOverrideJson ?? rule.templateJson;
+      const templateJson = channel.templateOverrideJson ?? ruleTemplateJson;
       const template = parseStoredJson(templateJson, `rule template ${rule.id}`);
       const message = renderNotificationMessage({
         template,
@@ -533,6 +534,16 @@ async function buildOutboxItems(input: BuildOutboxInput): Promise<NewOutboxItem[
   }
 
   return outboxItems;
+}
+
+async function resolveRuleTemplateJson(store: SqliteStore, rule: RuleRecord): Promise<string> {
+  if (!rule.templateId) {
+    return rule.templateJson;
+  }
+
+  const template = await store.getNotificationTemplate(rule.templateId);
+
+  return template?.templateJson ?? rule.templateJson;
 }
 
 function parseJsonObject(

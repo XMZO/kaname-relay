@@ -393,6 +393,98 @@ describe('server webhook endpoint', () => {
     });
   });
 
+  it('uses reusable notification templates and applies updates without editing the rule', async () => {
+    const { db, store } = createHarness();
+    db.prepare(
+      `
+      INSERT INTO notification_templates (
+        id, name, template_json, sample_payload_json, created_at, updated_at
+      ) VALUES (
+        'template-runtime',
+        'Runtime Template',
+        '{"text":"Shared {{payload.name}}","title":"{{eventType}}"}',
+        '{}',
+        1_000,
+        1_000
+      )
+      `,
+    ).run();
+    db.prepare("UPDATE rules SET template_id = 'template-runtime' WHERE id = 'rule-1'").run();
+
+    let id = 0;
+    let lease = 0;
+    const app = createServerApp({
+      store,
+      now: () => 10_000,
+      idGenerator: () => `id-${++id}`,
+    });
+    const send = vi.fn<Notifier['send']>().mockResolvedValue({
+      providerMessageId: 'provider-template',
+      providerResponseJson: { ok: true },
+    });
+    const runPending = () =>
+      processPending({
+        store: new SqliteProcessPendingStore(store),
+        notifiers: {
+          telegram: {
+            type: 'telegram',
+            send,
+          },
+        },
+        now: () => 20_000,
+        idGenerator: () => `lease-${++lease}`,
+        limit: 10,
+        recoverLimit: 10,
+        leaseMs: 90_000,
+        sendTimeoutMs: 1_000,
+        maxConcurrency: 1,
+        backoff: {
+          initialDelayMs: 30_000,
+          multiplier: 2,
+          maxDelayMs: 1_800_000,
+        },
+        random: () => 0.5,
+      });
+
+    const first = await app.request('/hooks/source-1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'evt-template-1', eventType: 'demo', name: 'Ada' }),
+    });
+    expect(first.status).toBe(202);
+    await expect(runPending()).resolves.toMatchObject({ sent: 1 });
+
+    db.prepare(
+      `
+      UPDATE notification_templates
+      SET template_json = '{"text":"Updated {{payload.name}}","title":"{{sourceId}}"}',
+          updated_at = 30_000
+      WHERE id = 'template-runtime'
+      `,
+    ).run();
+
+    const second = await app.request('/hooks/source-1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'evt-template-2', eventType: 'demo', name: 'Grace' }),
+    });
+    expect(second.status).toBe(202);
+    await expect(runPending()).resolves.toMatchObject({ sent: 1 });
+
+    expect(send).toHaveBeenNthCalledWith(
+      1,
+      { text: 'Shared Ada', title: 'demo' },
+      expect.anything(),
+    );
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      { text: 'Updated Grace', title: 'source-1' },
+      expect.anything(),
+    );
+    const sentLog = db.prepare('SELECT COUNT(*) AS count FROM sent_log').get() as { count: number };
+    expect(sentLog.count).toBe(2);
+  });
+
   it('treats committed inbound dedupe keys as duplicates without adding outbox rows', async () => {
     const { db, store } = createHarness();
     let id = 0;

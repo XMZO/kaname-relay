@@ -1,11 +1,13 @@
 # Notification templates
 
-Kaname rules support two notification template engines:
+Kaname notification templates support two engines:
 
 - `simple` (default): existing `{{payload.path}}` replacement.
 - `liquid`: bounded Liquid templates with conditions, loops, variables, and filters.
 
-Existing templates remain compatible. To enable Liquid, set `engine` in the rule's notification template JSON:
+The WebUI has a dedicated **Templates** page for reusable templates, sample payloads, and previews. A rule can select one reusable template or keep using its original inline template. Channel-level overrides still have the highest priority, followed by the reusable template, then the rule's inline fallback.
+
+Existing inline templates remain compatible. To enable Liquid, set `engine` in the notification template JSON:
 
 ```json
 {
@@ -74,9 +76,9 @@ Channel configuration overrides metadata when both specify the same Telegram opt
 1. Create or edit a `Komari` source in Kaname and apply its source preset.
 2. In Komari, create a JavaScript notification sender.
 3. Paste the raw-event relay script displayed by Kaname under the source form.
-4. Create a rule for that source and apply the Komari rule preset.
-5. Change `variables.panelUrl` in the notification template JSON to the real Komari panel URL.
-6. Select the Telegram or email channels and preview the rule with the included sample payload.
+4. Open **Templates**, apply the Komari preset, change `variables.panelUrl` to the real Komari panel URL, preview it, and save it.
+5. Create a rule for the Komari source, apply the Komari match preset, and select the saved reusable template.
+6. Select the Telegram or email channels and preview the rule with the template's sample payload.
 
 The relay script sends only fields needed for formatting. In particular, it does not forward the Komari client token.
 

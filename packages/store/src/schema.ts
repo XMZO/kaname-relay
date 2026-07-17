@@ -46,11 +46,27 @@ export const channels = sqliteTable(
   ],
 );
 
+export const notificationTemplates = sqliteTable(
+  'notification_templates',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull().unique(),
+    templateJson: text('template_json').notNull().default('{}'),
+    samplePayloadJson: text('sample_payload_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [index('idx_notification_templates_updated').on(desc(table.updatedAt))],
+);
+
 export const rules = sqliteTable(
   'rules',
   {
     id: text('id').primaryKey(),
     sourceId: text('source_id').references(() => webhookSources.id, { onDelete: 'cascade' }),
+    templateId: text('template_id').references(() => notificationTemplates.id, {
+      onDelete: 'set null',
+    }),
     name: text('name').notNull(),
     enabled: integer('enabled').notNull().default(1),
     priority: integer('priority').notNull().default(0),
@@ -69,6 +85,7 @@ export const rules = sqliteTable(
       desc(table.priority),
     ),
     index('idx_rules_enabled_priority').on(table.enabled, desc(table.priority)),
+    index('idx_rules_template_id').on(table.templateId),
   ],
 );
 

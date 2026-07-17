@@ -15,7 +15,9 @@ import {
   SqliteStore,
   type ChannelRecord,
   type ListOutboxFilters,
+  type NotificationTemplateRecord,
   type PatchChannelInput,
+  type PatchNotificationTemplateInput,
   type PatchRuleInput,
   type PatchWebhookSourceInput,
   type SaveRuleInput,
@@ -384,6 +386,95 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     return context.json({ ok: true, result });
   });
 
+  app.get('/api/admin/templates', async (context) =>
+    context.json({
+      templates: (await options.store.listNotificationTemplates()).map(
+        notificationTemplateResponse,
+      ),
+    }),
+  );
+
+  app.post('/api/admin/templates', async (context) => {
+    const body = await readJsonObject(context);
+    const template = validatedNotificationTemplate(jsonObject(body.template, 'template'));
+    const samplePayload = jsonObjectOrDefault(body.samplePayload, {}, 'samplePayload');
+    const notificationTemplate = await options.store.saveNotificationTemplate({
+      id: stringOrDefault(body.id, options.idGenerator()),
+      name: requiredString(body.name, 'name'),
+      templateJson: JSON.stringify(template),
+      samplePayloadJson: JSON.stringify(samplePayload),
+      now: options.now(),
+    });
+
+    return context.json({ template: notificationTemplateResponse(notificationTemplate) }, 201);
+  });
+
+  app.patch('/api/admin/templates/:id', async (context) => {
+    const body = await readJsonObject(context);
+    const patch: PatchNotificationTemplateInput = {
+      id: context.req.param('id'),
+      now: options.now(),
+    };
+    const name = optionalString(body.name, 'name');
+
+    if (name !== undefined) {
+      patch.name = name;
+    }
+
+    if (body.template !== undefined) {
+      patch.templateJson = JSON.stringify(
+        validatedNotificationTemplate(jsonObject(body.template, 'template')),
+      );
+    }
+
+    if (body.samplePayload !== undefined) {
+      patch.samplePayloadJson = JSON.stringify(jsonObject(body.samplePayload, 'samplePayload'));
+    }
+
+    const notificationTemplate = await options.store.patchNotificationTemplate(patch);
+
+    if (!notificationTemplate) {
+      throw new AdminHttpError(404, 'notification template not found');
+    }
+
+    return context.json({ template: notificationTemplateResponse(notificationTemplate) });
+  });
+
+  app.delete('/api/admin/templates/:id', async (context) => {
+    const deleted = await options.store.deleteNotificationTemplate(context.req.param('id'));
+
+    if (!deleted) {
+      throw new AdminHttpError(404, 'notification template not found');
+    }
+
+    return context.json({ ok: true });
+  });
+
+  app.post('/api/admin/templates/preview', async (context) => {
+    const body = await readJsonObject(context);
+    const payload = jsonObjectOrDefault(body.payload, {}, 'payload');
+    const template = validatedNotificationTemplate(jsonObject(body.template, 'template'));
+    const eventType =
+      optionalNullableString(body.eventType, 'eventType') ??
+      (typeof payload.eventType === 'string'
+        ? payload.eventType
+        : typeof payload.event === 'string'
+          ? payload.event
+          : null);
+
+    return context.json({
+      message: renderNotificationMessage({
+        template,
+        payload,
+        sourceId: optionalString(body.sourceId, 'sourceId') ?? 'preview-source',
+        eventType,
+        ruleId: optionalString(body.ruleId, 'ruleId') ?? 'preview-rule',
+        channelId: optionalString(body.channelId, 'channelId') ?? 'preview-channel',
+        now: options.now(),
+      }),
+    });
+  });
+
   app.get('/api/admin/rules', async (context) => {
     const rules = await options.store.listRules();
     const ruleChannels = await options.store.listRuleChannelsForRules(rules.map((rule) => rule.id));
@@ -410,12 +501,17 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
       now: options.now(),
     };
     const sourceId = optionalNullableString(body.sourceId, 'sourceId');
+    const templateId = optionalNullableString(body.templateId, 'templateId');
 
     if (sourceId !== undefined) {
       input.sourceId = sourceId;
     }
 
-    await assertRuleReferences(options.store, sourceId, input.channelIds);
+    if (templateId !== undefined) {
+      input.templateId = templateId;
+    }
+
+    await assertRuleReferences(options.store, sourceId, templateId, input.channelIds);
 
     const rule = await options.store.saveRule(input);
     const ruleChannels = await options.store.listRuleChannelsForRules([rule.id]);
@@ -430,6 +526,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
       now: options.now(),
     };
     const sourceId = optionalNullableString(body.sourceId, 'sourceId');
+    const templateId = optionalNullableString(body.templateId, 'templateId');
     const name = optionalString(body.name, 'name');
     const enabled = optionalBoolean(body.enabled, 'enabled');
     const priority = optionalNumber(body.priority, 'priority');
@@ -437,6 +534,10 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
 
     if (sourceId !== undefined) {
       patch.sourceId = sourceId;
+    }
+
+    if (templateId !== undefined) {
+      patch.templateId = templateId;
     }
 
     if (name !== undefined) {
@@ -469,7 +570,7 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
       patch.channelIds = uniqueStrings(stringArrayOrDefault(body.channelIds, []));
     }
 
-    await assertRuleReferences(options.store, sourceId, patch.channelIds);
+    await assertRuleReferences(options.store, sourceId, templateId, patch.channelIds);
 
     const rule = await options.store.patchRule(patch);
 
@@ -486,9 +587,10 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     const body = await readJsonObject(context);
     const payload = jsonObject(body.payload, 'payload');
     const match = jsonObjectOrDefault(body.match, {}, 'match');
-    const template = validatedNotificationTemplate(
-      jsonObjectOrDefault(body.template, {}, 'template'),
-    );
+    const templateId = optionalNullableString(body.templateId, 'templateId');
+    const template = templateId
+      ? await loadNotificationTemplate(options.store, templateId)
+      : validatedNotificationTemplate(jsonObjectOrDefault(body.template, {}, 'template'));
     const matched = matchesRule(match, payload);
     const requestedChannelIds = uniqueStrings(stringArrayOrDefault(body.channelIds, []));
     const channelIds = requestedChannelIds.length > 0 ? requestedChannelIds : ['preview'];
@@ -530,11 +632,15 @@ export function mountAdminRoutes(app: Hono, options: AdminRoutesOptions): void {
     const match = parseJson(rule.matchJson, 'rule match');
     const matched = matchesRule(match, payload);
     const ruleChannels = await options.store.listRuleChannelsForRules([rule.id]);
+    const ruleTemplateJson = await resolveRuleTemplateJson(options.store, rule);
     const messages = matched
       ? ruleChannels.map((channel) => ({
           channelId: channel.channelId,
           message: renderNotificationMessage({
-            template: parseJson(rule.templateJson, 'rule template'),
+            template: parseJson(
+              channel.templateOverrideJson ?? ruleTemplateJson,
+              `rule template ${rule.id}`,
+            ),
             payload,
             sourceId: rule.sourceId ?? '',
             eventType: typeof payload.eventType === 'string' ? payload.eventType : null,
@@ -959,6 +1065,20 @@ function channelResponse(channel: ChannelRecord): JsonObject {
   };
 }
 
+function notificationTemplateResponse(template: NotificationTemplateRecord): JsonObject {
+  return {
+    id: template.id,
+    name: template.name,
+    template: parseJsonObject(template.templateJson, `notification template ${template.id}`),
+    samplePayload: parseJsonObject(
+      template.samplePayloadJson,
+      `notification template sample payload ${template.id}`,
+    ),
+    createdAt: template.createdAt,
+    updatedAt: template.updatedAt,
+  };
+}
+
 function ruleResponse(
   rule: RuleRecord,
   channels: Array<{ ruleId: string; channelId: string }>,
@@ -966,6 +1086,7 @@ function ruleResponse(
   return {
     id: rule.id,
     sourceId: rule.sourceId,
+    templateId: rule.templateId,
     name: rule.name,
     enabled: rule.enabled,
     priority: rule.priority,
@@ -983,10 +1104,15 @@ function ruleResponse(
 async function assertRuleReferences(
   store: SqliteStore,
   sourceId: string | null | undefined,
+  templateId: string | null | undefined,
   channelIds: string[] | undefined,
 ): Promise<void> {
   if (sourceId && !(await store.getSource(sourceId))) {
     throw new AdminHttpError(400, `unknown source ID: ${sourceId}`);
+  }
+
+  if (templateId && !(await store.getNotificationTemplate(templateId))) {
+    throw new AdminHttpError(400, `unknown notification template ID: ${templateId}`);
   }
 
   if (!channelIds || channelIds.length === 0) {
@@ -1001,6 +1127,28 @@ async function assertRuleReferences(
   if (missing.length > 0) {
     throw new AdminHttpError(400, `unknown channel IDs: ${missing.join(', ')}`);
   }
+}
+
+async function loadNotificationTemplate(store: SqliteStore, id: string): Promise<JsonObject> {
+  const template = await store.getNotificationTemplate(id);
+
+  if (!template) {
+    throw new AdminHttpError(400, `unknown notification template ID: ${id}`);
+  }
+
+  return validatedNotificationTemplate(
+    parseJsonObject(template.templateJson, `notification template ${template.id}`),
+  );
+}
+
+async function resolveRuleTemplateJson(store: SqliteStore, rule: RuleRecord): Promise<string> {
+  if (!rule.templateId) {
+    return rule.templateJson;
+  }
+
+  const template = await store.getNotificationTemplate(rule.templateId);
+
+  return template?.templateJson ?? rule.templateJson;
 }
 
 async function channelConfig(

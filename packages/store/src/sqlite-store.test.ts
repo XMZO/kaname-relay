@@ -152,6 +152,7 @@ describe('store migration', () => {
     expect(tables.map((table) => table.name)).toEqual([
       'app_settings',
       'channels',
+      'notification_templates',
       'outbox',
       'received_events',
       'rule_channels',
@@ -165,6 +166,11 @@ describe('store migration', () => {
       name: string;
     }>;
     expect(receivedColumns.map((column) => column.name)).toContain('committed');
+
+    const ruleColumns = db.prepare('PRAGMA table_info(rules)').all() as Array<{
+      name: string;
+    }>;
+    expect(ruleColumns.map((column) => column.name)).toContain('template_id');
 
     const outboxIndexes = db.prepare('PRAGMA index_list(outbox)').all() as Array<{
       name: string;
@@ -194,6 +200,62 @@ describe('store migration', () => {
       )
       .get() as { sql: string };
     expect(sourceIdIndex.sql).toContain('id COLLATE NOCASE');
+  });
+});
+
+describe('SqliteStore notification templates', () => {
+  it('supports CRUD and makes referencing rules fall back to inline templates on delete', async () => {
+    const { store } = createHarness();
+
+    const saved = await store.saveNotificationTemplate({
+      id: 'template-1',
+      name: 'Reusable Template',
+      templateJson: '{"text":"Shared {{payload.name}}"}',
+      samplePayloadJson: '{"name":"Ada"}',
+      now: 2_000,
+    });
+    expect(saved).toMatchObject({
+      id: 'template-1',
+      name: 'Reusable Template',
+      templateJson: '{"text":"Shared {{payload.name}}"}',
+    });
+    await expect(store.listNotificationTemplates()).resolves.toEqual([saved]);
+
+    const patched = await store.patchNotificationTemplate({
+      id: 'template-1',
+      name: 'Updated Template',
+      templateJson: '{"text":"Updated {{payload.name}}"}',
+      now: 3_000,
+    });
+    expect(patched).toMatchObject({
+      name: 'Updated Template',
+      templateJson: '{"text":"Updated {{payload.name}}"}',
+      samplePayloadJson: '{"name":"Ada"}',
+      updatedAt: 3_000,
+    });
+
+    const rule = await store.saveRule({
+      id: 'rule-template',
+      sourceId: 'source-1',
+      templateId: 'template-1',
+      name: 'Template Rule',
+      enabled: true,
+      priority: 1,
+      matchJson: '{}',
+      templateJson: '{"text":"Inline fallback"}',
+      stopOnMatch: false,
+      channelIds: ['channel-1'],
+      now: 4_000,
+    });
+    expect(rule.templateId).toBe('template-1');
+
+    await expect(store.deleteNotificationTemplate('template-1')).resolves.toBe(true);
+    await expect(store.getNotificationTemplate('template-1')).resolves.toBeNull();
+    await expect(store.getRule('rule-template')).resolves.toMatchObject({
+      templateId: null,
+      templateJson: '{"text":"Inline fallback"}',
+    });
+    await expect(store.deleteNotificationTemplate('template-1')).resolves.toBe(false);
   });
 });
 

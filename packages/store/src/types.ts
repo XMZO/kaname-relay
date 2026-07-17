@@ -28,9 +28,19 @@ export interface ChannelRecord {
   updatedAt: UnixMs;
 }
 
+export interface NotificationTemplateRecord {
+  id: string;
+  name: string;
+  templateJson: string;
+  samplePayloadJson: string;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
 export interface RuleRecord {
   id: string;
   sourceId: string | null;
+  templateId: string | null;
   name: string;
   enabled: boolean;
   priority: number;
@@ -97,9 +107,26 @@ export interface PatchChannelInput {
   now: UnixMs;
 }
 
+export interface SaveNotificationTemplateInput {
+  id: string;
+  name: string;
+  templateJson: string;
+  samplePayloadJson: string;
+  now: UnixMs;
+}
+
+export interface PatchNotificationTemplateInput {
+  id: string;
+  name?: string;
+  templateJson?: string;
+  samplePayloadJson?: string;
+  now: UnixMs;
+}
+
 export interface SaveRuleInput {
   id: string;
   sourceId?: string | null;
+  templateId?: string | null;
   name: string;
   enabled: boolean;
   priority: number;
@@ -113,6 +140,7 @@ export interface SaveRuleInput {
 export interface PatchRuleInput {
   id: string;
   sourceId?: string | null;
+  templateId?: string | null;
   name?: string;
   enabled?: boolean;
   priority?: number;

@@ -223,9 +223,19 @@ interface ChannelRow {
   hasSecret: boolean;
 }
 
+interface NotificationTemplateRow {
+  id: string;
+  name: string;
+  template: JsonRecord;
+  samplePayload: JsonRecord;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface RuleRow {
   id: string;
   sourceId: string | null;
+  templateId: string | null;
   name: string;
   enabled: boolean;
   priority: number;
@@ -267,6 +277,7 @@ const tabs = [
   'dashboard',
   'sources',
   'channels',
+  'templates',
   'rules',
   'outbox',
   'sent-log',
@@ -303,6 +314,7 @@ const app = createApp({
       },
       sources: [] as SourceRow[],
       channels: [] as ChannelRow[],
+      templates: [] as NotificationTemplateRow[],
       rules: [] as RuleRow[],
       outbox: [] as OutboxRow[],
       sentLog: [] as SentLogRow[],
@@ -322,9 +334,17 @@ const app = createApp({
         secretsText: '{}',
       },
       channelForm: createChannelForm(),
+      templateForm: {
+        id: '',
+        name: '',
+        templateText: pretty(sourceTypePresets.generic.template),
+        samplePayloadText: pretty(sourceTypePresets.generic.samplePayload),
+      },
+      templatePreviewResult: '',
       ruleForm: {
         id: '',
         sourceId: '',
+        templateId: '',
         name: '',
         enabled: true,
         priority: 0,
@@ -408,6 +428,10 @@ const app = createApp({
         return `${t.value.messages.unknownChannelIds}: ${error.message.slice('unknown channel IDs:'.length).trim()}`;
       }
 
+      if (error.message.startsWith('unknown notification template ID:')) {
+        return `${t.value.messages.unknownTemplateId}: ${error.message.slice('unknown notification template ID:'.length).trim()}`;
+      }
+
       return error.message;
     }
 
@@ -470,8 +494,10 @@ const app = createApp({
         await loadSources();
       } else if (tab === 'channels') {
         await loadChannels();
+      } else if (tab === 'templates') {
+        await loadTemplates();
       } else if (tab === 'rules') {
-        await Promise.all([loadSources(), loadChannels(), loadRules()]);
+        await Promise.all([loadSources(), loadChannels(), loadTemplates(), loadRules()]);
       } else if (tab === 'outbox') {
         await loadOutbox();
       } else if (tab === 'sent-log') {
@@ -621,6 +647,114 @@ const app = createApp({
       }, t.value.messages.testSent);
     }
 
+    async function loadTemplates(): Promise<void> {
+      const data = await request<{ templates: NotificationTemplateRow[] }>('/api/admin/templates');
+      state.templates = data.templates;
+    }
+
+    async function saveTemplate(): Promise<void> {
+      await run(async () => {
+        const data = await request<{ template: NotificationTemplateRow }>('/api/admin/templates', {
+          method: 'POST',
+          body: JSON.stringify({
+            id: optionalText(state.templateForm.id),
+            name: state.templateForm.name,
+            template: parseJsonObject(state.templateForm.templateText),
+            samplePayload: parseJsonObject(state.templateForm.samplePayloadText),
+          }),
+        });
+        editTemplate(data.template);
+        await loadTemplates();
+      }, t.value.messages.templateSaved);
+    }
+
+    function editTemplate(template: NotificationTemplateRow): void {
+      state.templateForm = {
+        id: template.id,
+        name: template.name,
+        templateText: pretty(template.template),
+        samplePayloadText: pretty(template.samplePayload),
+      };
+      state.templatePreviewResult = '';
+    }
+
+    async function patchTemplate(): Promise<void> {
+      await run(async () => {
+        const data = await request<{ template: NotificationTemplateRow }>(
+          `/api/admin/templates/${state.templateForm.id}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({
+              name: state.templateForm.name,
+              template: parseJsonObject(state.templateForm.templateText),
+              samplePayload: parseJsonObject(state.templateForm.samplePayloadText),
+            }),
+          },
+        );
+        editTemplate(data.template);
+        await loadTemplates();
+      }, t.value.messages.templateUpdated);
+    }
+
+    async function deleteTemplate(templateId = state.templateForm.id): Promise<void> {
+      if (!window.confirm(t.value.messages.deleteTemplateConfirm)) {
+        return;
+      }
+
+      await run(async () => {
+        await request(`/api/admin/templates/${templateId}`, { method: 'DELETE' });
+
+        if (state.templateForm.id === templateId) {
+          resetTemplateForm();
+        }
+
+        await loadTemplates();
+      }, t.value.messages.templateDeleted);
+    }
+
+    async function previewTemplate(): Promise<void> {
+      await run(async () => {
+        const data = await request<JsonRecord>('/api/admin/templates/preview', {
+          method: 'POST',
+          body: JSON.stringify({
+            template: parseJsonObject(state.templateForm.templateText),
+            payload: parseJsonObject(state.templateForm.samplePayloadText),
+          }),
+        });
+        state.templatePreviewResult = pretty(data);
+      });
+    }
+
+    function applyKomariTemplatePreset(): void {
+      if (state.templateForm.id.trim().length === 0) {
+        state.templateForm.id = 'komari-default';
+      }
+
+      if (state.templateForm.name.trim().length === 0) {
+        state.templateForm.name = t.value.templateDefaults.komariName;
+      }
+
+      state.templateForm.templateText = pretty(KOMARI_NOTIFICATION_TEMPLATE);
+      state.templateForm.samplePayloadText = pretty(KOMARI_SAMPLE_PAYLOAD);
+      state.templatePreviewResult = '';
+    }
+
+    function resetTemplateForm(): void {
+      state.templateForm = {
+        id: '',
+        name: '',
+        templateText: pretty(sourceTypePresets.generic.template),
+        samplePayloadText: pretty(sourceTypePresets.generic.samplePayload),
+      };
+      state.templatePreviewResult = '';
+    }
+
+    function templateExists(templateId = state.templateForm.id): boolean {
+      return (
+        templateId.length > 0 && state.templates.some((template) => template.id === templateId)
+      );
+    }
+
     async function loadRules(): Promise<void> {
       const data = await request<{ rules: RuleRow[] }>('/api/admin/rules');
       state.rules = data.rules;
@@ -633,6 +767,7 @@ const app = createApp({
           body: JSON.stringify({
             id: optionalText(state.ruleForm.id),
             sourceId: optionalText(state.ruleForm.sourceId),
+            templateId: nullableTextValue(state.ruleForm.templateId),
             name: state.ruleForm.name,
             enabled: state.ruleForm.enabled,
             priority: Number(state.ruleForm.priority),
@@ -647,9 +782,12 @@ const app = createApp({
     }
 
     function editRule(rule: RuleRow): void {
+      const selectedTemplate = state.templates.find((template) => template.id === rule.templateId);
+
       state.ruleForm = {
         id: rule.id,
         sourceId: rule.sourceId ?? '',
+        templateId: rule.templateId ?? '',
         name: rule.name,
         enabled: rule.enabled,
         priority: rule.priority,
@@ -657,7 +795,9 @@ const app = createApp({
         matchText: pretty(rule.match),
         templateText: pretty(rule.template),
         channelIdsText: rule.channelIds.join(', '),
-        samplePayloadText: state.ruleForm.samplePayloadText,
+        samplePayloadText: selectedTemplate
+          ? pretty(selectedTemplate.samplePayload)
+          : state.ruleForm.samplePayloadText,
       };
     }
 
@@ -667,6 +807,7 @@ const app = createApp({
           method: 'PATCH',
           body: JSON.stringify({
             sourceId: optionalText(state.ruleForm.sourceId),
+            templateId: nullableTextValue(state.ruleForm.templateId),
             name: state.ruleForm.name,
             enabled: enabled ?? state.ruleForm.enabled,
             priority: Number(state.ruleForm.priority),
@@ -687,6 +828,7 @@ const app = createApp({
           body: JSON.stringify({
             ruleId: optionalText(state.ruleForm.id),
             sourceId: optionalText(state.ruleForm.sourceId),
+            templateId: nullableTextValue(state.ruleForm.templateId),
             match: parseJsonObject(state.ruleForm.matchText),
             template: parseJsonObject(state.ruleForm.templateText),
             channelIds: splitList(state.ruleForm.channelIdsText),
@@ -793,6 +935,8 @@ const app = createApp({
 
     function toggleLanguage(): void {
       locale.value = locale.value === 'en' ? 'zh' : 'en';
+      state.notice = '';
+      state.error = '';
 
       try {
         localStorage.setItem(languageStorageKey, locale.value);
@@ -851,9 +995,26 @@ const app = createApp({
       }
 
       const preset = sourceTypePresets[type];
+      state.ruleForm.templateId = '';
       state.ruleForm.matchText = pretty(preset.match);
       state.ruleForm.templateText = pretty(preset.template);
       state.ruleForm.samplePayloadText = pretty(preset.samplePayload);
+    }
+
+    function applySelectedRuleTemplate(): void {
+      const template = state.templates.find((item) => item.id === state.ruleForm.templateId);
+
+      if (template) {
+        state.ruleForm.samplePayloadText = pretty(template.samplePayload);
+      }
+    }
+
+    function templateName(templateId: string | null): string {
+      if (!templateId) {
+        return t.value.common.inlineTemplate;
+      }
+
+      return state.templates.find((template) => template.id === templateId)?.name ?? templateId;
     }
 
     function sourceSetupHelp(): string {
@@ -999,6 +1160,8 @@ const app = createApp({
       applySourceTypePreset,
       selectedRuleSourceType,
       applyRuleSourcePreset,
+      applySelectedRuleTemplate,
+      templateName,
       sourceSetupHelp,
       sourceUpstreamSetup,
       sourceDedupeWarning,
@@ -1023,6 +1186,13 @@ const app = createApp({
       patchChannel,
       setChannelEnabled,
       testChannel,
+      saveTemplate,
+      editTemplate,
+      patchTemplate,
+      deleteTemplate,
+      previewTemplate,
+      applyKomariTemplatePreset,
+      templateExists,
       saveRule,
       editRule,
       patchRule,
@@ -1288,6 +1458,51 @@ const app = createApp({
           </section>
         </template>
 
+        <template v-if="state.activeTab === 'templates'">
+          <section class="split">
+            <form class="panel" @submit.prevent="saveTemplate">
+              <div class="panel-header"><h2>{{ t.sections.template }}</h2></div>
+              <div class="panel-body form-grid">
+                <label><span>{{ t.labels.id }}</span><input v-model="state.templateForm.id" /></label>
+                <label><span>{{ t.labels.name }}</span><input v-model="state.templateForm.name" /></label>
+                <div class="wide inline-actions">
+                  <span class="muted">{{ t.templateHelp.komariPreset }}</span>
+                  <button type="button" @click="applyKomariTemplatePreset">{{ t.buttons.komariPreset }}</button>
+                </div>
+                <div class="wide form-note">{{ t.templateHelp.reusable }}</div>
+                <label class="wide"><span>{{ t.labels.templateJson }}</span><textarea v-model="state.templateForm.templateText"></textarea></label>
+                <label class="wide"><span>{{ t.labels.samplePayload }}</span><textarea v-model="state.templateForm.samplePayloadText"></textarea></label>
+                <div class="actions wide">
+                  <button class="primary" type="submit">{{ t.buttons.create }}</button>
+                  <button type="button" :disabled="!templateExists()" @click="patchTemplate">{{ t.buttons.update }}</button>
+                  <button type="button" @click="previewTemplate">{{ t.buttons.preview }}</button>
+                  <button type="button" :disabled="!templateExists()" @click="deleteTemplate()">{{ t.buttons.delete }}</button>
+                </div>
+                <pre v-if="state.templatePreviewResult" class="wide">{{ state.templatePreviewResult }}</pre>
+              </div>
+            </form>
+            <section class="panel">
+              <div class="panel-header">
+                <h2>{{ t.sections.templates }}</h2>
+                <button type="button" :disabled="state.loading" @click="refreshCurrentTab">{{ t.buttons.refresh }}</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>{{ t.labels.name }}</th><th>{{ t.labels.id }}</th><th>{{ t.tables.updated }}</th><th></th></tr></thead>
+                  <tbody>
+                    <tr v-for="template in state.templates" :key="template.id">
+                      <td>{{ template.name }}</td>
+                      <td class="mono">{{ template.id }}</td>
+                      <td>{{ formatTime(template.updatedAt) }}</td>
+                      <td class="actions"><button @click="editTemplate(template)">{{ t.buttons.edit }}</button><button @click="deleteTemplate(template.id)">{{ t.buttons.delete }}</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+        </template>
+
         <template v-if="state.activeTab === 'rules'">
           <section class="split">
             <form class="panel" @submit.prevent="saveRule">
@@ -1304,6 +1519,15 @@ const app = createApp({
                     </option>
                   </select>
                 </label>
+                <label>
+                  <span>{{ t.labels.templateId }}</span>
+                  <select v-model="state.ruleForm.templateId" @change="applySelectedRuleTemplate">
+                    <option value="">{{ t.common.inlineTemplate }}</option>
+                    <option v-for="template in state.templates" :key="template.id" :value="template.id">
+                      {{ template.name }} · {{ template.id }}
+                    </option>
+                  </select>
+                </label>
                 <label><span>{{ t.labels.priority }}</span><input v-model.number="state.ruleForm.priority" type="number" /></label>
                 <label><span>{{ t.labels.enabled }}</span><select v-model="state.ruleForm.enabled"><option :value="true">{{ t.common.true }}</option><option :value="false">{{ t.common.false }}</option></select></label>
                 <label><span>{{ t.labels.stopOnMatch }}</span><select v-model="state.ruleForm.stopOnMatch"><option :value="true">{{ t.common.true }}</option><option :value="false">{{ t.common.false }}</option></select></label>
@@ -1312,7 +1536,8 @@ const app = createApp({
                   <button type="button" @click="applyRuleSourcePreset">{{ t.buttons.applyPreset }}</button>
                 </div>
                 <label class="wide"><span>{{ t.labels.matchJson }}</span><textarea v-model="state.ruleForm.matchText"></textarea></label>
-                <label class="wide"><span>{{ t.labels.templateJson }}</span><textarea v-model="state.ruleForm.templateText"></textarea></label>
+                <div v-if="state.ruleForm.templateId" class="wide form-note">{{ t.templateHelp.inlineFallback }}</div>
+                <label class="wide"><span>{{ state.ruleForm.templateId ? t.labels.inlineTemplateFallback : t.labels.templateJson }}</span><textarea v-model="state.ruleForm.templateText"></textarea></label>
                 <div class="field-group wide">
                   <span class="field-label">{{ t.labels.channelIds }}</span>
                   <div v-if="state.channels.length > 0" class="choice-list">
@@ -1347,11 +1572,12 @@ const app = createApp({
               </div>
               <div class="table-wrap">
                 <table>
-                  <thead><tr><th>{{ t.labels.name }}</th><th>{{ t.tables.source }}</th><th>{{ t.labels.enabled }}</th><th>{{ t.labels.priority }}</th><th>{{ t.labels.stopOnMatch }}</th><th>{{ t.tables.channels }}</th><th></th></tr></thead>
+                  <thead><tr><th>{{ t.labels.name }}</th><th>{{ t.tables.source }}</th><th>{{ t.tables.template }}</th><th>{{ t.labels.enabled }}</th><th>{{ t.labels.priority }}</th><th>{{ t.labels.stopOnMatch }}</th><th>{{ t.tables.channels }}</th><th></th></tr></thead>
                   <tbody>
                     <tr v-for="rule in state.rules" :key="rule.id">
                       <td>{{ rule.name }}<br /><span class="muted mono">{{ rule.id }}</span></td>
                       <td class="mono">{{ rule.sourceId }}</td>
+                      <td>{{ templateName(rule.templateId) }}</td>
                       <td>{{ booleanLabel(rule.enabled) }}</td>
                       <td>{{ rule.priority }}</td>
                       <td>{{ booleanLabel(rule.stopOnMatch) }}</td>
@@ -1780,6 +2006,10 @@ function optionalText(value: string): string | undefined {
   const trimmed = value.trim();
 
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function nullableTextValue(value: string): string | null {
+  return optionalText(value) ?? null;
 }
 
 function splitList(value: string): string[] {

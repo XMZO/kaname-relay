@@ -17,9 +17,11 @@ import type {
   MarkOutboxSentInput,
   NewOutboxItem,
   NewSentLogEntry,
+  NotificationTemplateRecord,
   OutboxItem,
   OutboxStatus,
   PatchChannelInput,
+  PatchNotificationTemplateInput,
   PatchRuleInput,
   PatchWebhookSourceInput,
   RecoverExpiredLeasesInput,
@@ -27,6 +29,7 @@ import type {
   RuleChannelRecord,
   RuleRecord,
   SaveChannelInput,
+  SaveNotificationTemplateInput,
   SaveRuleInput,
   SaveWebhookSourceInput,
   ScheduleOutboxRetryInput,
@@ -80,9 +83,19 @@ interface ChannelRow {
   updated_at: number;
 }
 
+interface NotificationTemplateRow {
+  id: string;
+  name: string;
+  template_json: string;
+  sample_payload_json: string;
+  created_at: number;
+  updated_at: number;
+}
+
 interface RuleRow {
   id: string;
   source_id: string | null;
+  template_id: string | null;
   name: string;
   enabled: 0 | 1;
   priority: number;
@@ -233,10 +246,22 @@ function mapChannel(row: ChannelRow): ChannelRecord {
   };
 }
 
+function mapNotificationTemplate(row: NotificationTemplateRow): NotificationTemplateRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    templateJson: row.template_json,
+    samplePayloadJson: row.sample_payload_json,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapRule(row: RuleRow): RuleRecord {
   return {
     id: row.id,
     sourceId: row.source_id,
+    templateId: row.template_id,
     name: row.name,
     enabled: row.enabled === 1,
     priority: row.priority,
@@ -885,6 +910,95 @@ export class SqliteStore {
     return Promise.resolve(mapChannel(row));
   }
 
+  public listNotificationTemplates(): Promise<NotificationTemplateRecord[]> {
+    const rows = this.db
+      .prepare(
+        `
+        SELECT *
+        FROM notification_templates
+        ORDER BY updated_at DESC, created_at DESC
+        `,
+      )
+      .all() as NotificationTemplateRow[];
+
+    return Promise.resolve(rows.map(mapNotificationTemplate));
+  }
+
+  public getNotificationTemplate(id: string): Promise<NotificationTemplateRecord | null> {
+    const row = this.db.prepare('SELECT * FROM notification_templates WHERE id = ?').get(id) as
+      | NotificationTemplateRow
+      | undefined;
+
+    return Promise.resolve(row ? mapNotificationTemplate(row) : null);
+  }
+
+  public saveNotificationTemplate(
+    input: SaveNotificationTemplateInput,
+  ): Promise<NotificationTemplateRecord> {
+    const row = this.db
+      .prepare(
+        `
+        INSERT INTO notification_templates (
+          id, name, template_json, sample_payload_json, created_at, updated_at
+        ) VALUES (
+          :id, :name, :template_json, :sample_payload_json, :created_at, :updated_at
+        )
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        name: input.name,
+        template_json: input.templateJson,
+        sample_payload_json: input.samplePayloadJson,
+        created_at: input.now,
+        updated_at: input.now,
+      }) as NotificationTemplateRow;
+
+    return Promise.resolve(mapNotificationTemplate(row));
+  }
+
+  public patchNotificationTemplate(
+    input: PatchNotificationTemplateInput,
+  ): Promise<NotificationTemplateRecord | null> {
+    const existing = this.db
+      .prepare('SELECT * FROM notification_templates WHERE id = ?')
+      .get(input.id) as NotificationTemplateRow | undefined;
+
+    if (!existing) {
+      return Promise.resolve(null);
+    }
+
+    const row = this.db
+      .prepare(
+        `
+        UPDATE notification_templates
+        SET
+          name = :name,
+          template_json = :template_json,
+          sample_payload_json = :sample_payload_json,
+          updated_at = :updated_at
+        WHERE id = :id
+        RETURNING *
+        `,
+      )
+      .get({
+        id: input.id,
+        name: input.name ?? existing.name,
+        template_json: input.templateJson ?? existing.template_json,
+        sample_payload_json: input.samplePayloadJson ?? existing.sample_payload_json,
+        updated_at: input.now,
+      }) as NotificationTemplateRow;
+
+    return Promise.resolve(mapNotificationTemplate(row));
+  }
+
+  public deleteNotificationTemplate(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM notification_templates WHERE id = ?').run(id);
+
+    return Promise.resolve(result.changes > 0);
+  }
+
   public listRules(): Promise<RuleRecord[]> {
     const rows = this.db
       .prepare(
@@ -1371,10 +1485,10 @@ export class SqliteStore {
       .prepare(
         `
         INSERT INTO rules (
-          id, source_id, name, enabled, priority, match_json, template_json,
+          id, source_id, template_id, name, enabled, priority, match_json, template_json,
           stop_on_match, created_at, updated_at
         ) VALUES (
-          :id, :source_id, :name, :enabled, :priority, :match_json, :template_json,
+          :id, :source_id, :template_id, :name, :enabled, :priority, :match_json, :template_json,
           :stop_on_match, :created_at, :updated_at
         )
         RETURNING *
@@ -1383,6 +1497,7 @@ export class SqliteStore {
       .get({
         id: input.id,
         source_id: nullable(input.sourceId),
+        template_id: nullable(input.templateId),
         name: input.name,
         enabled: input.enabled ? 1 : 0,
         priority: input.priority,
@@ -1413,6 +1528,7 @@ export class SqliteStore {
         UPDATE rules
         SET
           source_id = :source_id,
+          template_id = :template_id,
           name = :name,
           enabled = :enabled,
           priority = :priority,
@@ -1427,6 +1543,7 @@ export class SqliteStore {
       .get({
         id: input.id,
         source_id: input.sourceId === undefined ? existing.source_id : input.sourceId,
+        template_id: input.templateId === undefined ? existing.template_id : input.templateId,
         name: input.name ?? existing.name,
         enabled: (input.enabled ?? existing.enabled === 1) ? 1 : 0,
         priority: input.priority ?? existing.priority,
